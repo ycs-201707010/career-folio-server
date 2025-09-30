@@ -150,4 +150,79 @@ router.post("/signup", async (req, res) => {
   }
 });
 
+// 5. 일반 로그인 API
+// POST /api/auth/login
+router.post("/login", async (req, res) => {
+  const { id, password } = req.body;
+
+  if (!id || !password) {
+    return res
+      .status(400)
+      .json({ message: "아이디와 비밀번호를 모두 입력해주세요." });
+  }
+
+  try {
+    // 1. user_credentials 테이블에서 id로 사용자 자격 증명 정보 조회
+    const [credentials] = await pool.query(
+      `SELECT * FROM user_credentials WHERE id = ?`,
+      [id]
+    );
+
+    if (credentials.length === 0) {
+      return res
+        .status(401)
+        .json({ message: "아이디 또는 비밀번호가 올바르지 않습니다." });
+    }
+
+    const credential = credentials[0];
+
+    // 2. 비밀번호 비교
+    const isMatch = await bcrypt.compare(password, credential.password);
+    if (!isMatch) {
+      return res
+        .status(401)
+        .json({ message: "아이디 또는 비밀번호가 올바르지 않습니다." });
+    }
+
+    // 3. users 테이블과 user_profile 테이블에서 사용자 정보 조회
+    const [users] = await pool.query(
+      `SELECT u.idx, u.name, u.email, up.nickname 
+             FROM users u 
+             JOIN user_profile up ON u.idx = up.user_idx 
+             WHERE u.idx = ?`,
+      [credential.user_idx]
+    );
+
+    if (users.length === 0) {
+      return res
+        .status(404)
+        .json({ message: "사용자 정보를 찾을 수 없습니다." });
+    }
+
+    const user = users[0];
+
+    // 4. JWT 토큰 생성
+    const token = jwt.sign(
+      {
+        userIdx: user.idx,
+        name: user.name,
+        email: user.email,
+        nickname: user.nickname,
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "3h" } // 3시간 유효
+    );
+
+    // 5. 토큰과 함께 사용자 정보 응답
+    res.json({
+      message: "로그인 성공!",
+      token,
+      user,
+    });
+  } catch (error) {
+    console.error("로그인 중 DB 오류:", error);
+    res.status(500).json({ message: "서버 오류가 발생했습니다." });
+  }
+});
+
 module.exports = router;
