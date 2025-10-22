@@ -137,3 +137,6 @@ dist
 # Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# 동영상 파일이 Git Repo에 저장되지 않도록
+/uploads

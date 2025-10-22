@@ -1,10 +1,10 @@
 const express = require("express");
-const bcrypt = require("bcrypt");
+const router = express.Router();
 const jwt = require("jsonwebtoken");
+// 비밀번호와 같은 민감한 정보를 해시 값으로 암호화/원래값으로 복호화 하는데 쓰임
+const bcrypt = require("bcrypt");
 const pool = require("../db"); // DB 커넥션 풀
 const { sendVerificationEmail } = require("../services/emailService"); // 이메일 서비스
-
-const router = express.Router();
 
 // 이메일 인증코드를 임시로 저장할 객체 (실제 프로덕션에서는 Redis 사용을 권장)
 // { "user@example.com": { code: "123456", expiresAt: 1678886400000, verified: false } }
@@ -186,7 +186,7 @@ router.post("/login", async (req, res) => {
 
     // 3. users 테이블과 user_profile 테이블에서 사용자 정보 조회
     const [users] = await pool.query(
-      `SELECT u.idx, u.name, u.email, up.nickname 
+      `SELECT u.idx, u.name, u.email, up.nickname, u.role
              FROM users u 
              JOIN user_profile up ON u.idx = up.user_idx 
              WHERE u.idx = ?`,
@@ -208,6 +208,7 @@ router.post("/login", async (req, res) => {
         name: user.name,
         email: user.email,
         nickname: user.nickname,
+        role: user.role,
       },
       process.env.JWT_SECRET,
       { expiresIn: "3h" } // 3시간 유효
