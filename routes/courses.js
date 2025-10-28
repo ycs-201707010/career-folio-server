@@ -6,24 +6,37 @@ const router = express.Router();
 const pool = require("../db");
 // 로그인 인증 기능을 수행할 미들웨어
 const { protect } = require("../middleware/authMiddleWare.js");
-const upload = require("../config/multerConfig"); // 방금 만든 multer 설정 import
+const { uploadImage, uploadVideo } = require("../config/multerConfig");
 
 // -- 강좌 관리 API --
 
 // 1. 새 강좌 생성
 // POST /api/courses
-router.post("/", protect, async (req, res) => {
+router.post("/", protect, uploadImage.single("thumbnail"), async (req, res) => {
   const { title, description, price, discount_price } = req.body;
   const instructor_idx = req.user.userIdx; // 미들웨어를 통과한 사용자의 인덱스
+  let thumbnailUrl = null;
 
   if (!title) {
     return res.status(400).json({ message: "강좌 제목은 필수입니다." });
   }
 
+  // 파일이 업로드되었으면 경로 저장
+  if (req.file) {
+    thumbnailUrl = req.file.path.replace(/\\/g, "/");
+  }
+
   try {
     const [result] = await pool.query(
-      `INSERT INTO courses (instructor_idx, title, description, price, discount_price, status) VALUES (?, ?, ?, ?, ?, 'draft')`,
-      [instructor_idx, title, description, price || 0, discount_price]
+      `INSERT INTO courses (instructor_idx, title, description, thumbnail_url, price, discount_price, status) VALUES (?, ?, ?, ?, ?, ?, 'draft')`,
+      [
+        instructor_idx,
+        title,
+        description,
+        thumbnailUrl,
+        price || 0,
+        discount_price,
+      ]
     );
     const newCourseId = result.insertId;
     const [newCourse] = await pool.query(
@@ -98,68 +111,94 @@ router.get("/:courseId", protect, async (req, res) => {
 
 // 4. 특정 강좌 정보 수정
 // PUT /api/courses/:courseId
-router.put("/:courseId", protect, async (req, res) => {
-  const { courseId } = req.params;
-  const courseData = req.body;
-  const instructor_idx = req.user.userIdx;
+router.put(
+  "/:courseId",
+  protect,
+  uploadImage.single("thumbnail"),
+  async (req, res) => {
+    const { courseId } = req.params;
+    // courseData 대신 req.body를 직접 사용하고, 각 필드를 명시적으로 확인합니다.
+    const { title, description, price, discount_price } = req.body;
+    const instructor_idx = req.user.userIdx;
+    let thumbnailUrl = undefined;
 
-  try {
-    // 본인이 만든 강좌가 맞는지 확인
-    const [courseCheck] = await pool.query(
-      `SELECT instructor_idx FROM courses WHERE idx = ?`,
-      [courseId]
-    );
-    if (
-      courseCheck.length === 0 ||
-      courseCheck[0].instructor_idx !== instructor_idx
-    ) {
-      return res.status(403).json({ message: "권한이 없습니다." });
+    if (req.file) {
+      thumbnailUrl = req.file.path.replace(/\\/g, "/");
+    } else if (req.body.thumbnail_url === "null") {
+      // thumbnail_url 삭제 요청 확인
+      thumbnailUrl = null;
     }
 
-    // **동적으로 Update 쿼리 생성**
-    const fieldsToUpdate = []; // 업데이트할 필드 (title, )
-    const values = []; // 필드에 삽입될 value 값 모음.
+    try {
+      const [courseCheck] = await pool.query(
+        `SELECT instructor_idx, thumbnail_url FROM courses WHERE idx = ?`,
+        [courseId]
+      ); // 기존 thumbnail_url도 조회
+      if (
+        courseCheck.length === 0 ||
+        courseCheck[0].instructor_idx !== instructor_idx
+      ) {
+        return res.status(403).json({ message: "권한이 없습니다." });
+      }
 
-    // req.body에 포함된 키만 쿼리에 추가
-    if (courseData.title !== undefined) {
-      fieldsToUpdate.push("title = ?");
-      values.push(courseData.title);
+      const existingThumbnail = courseCheck[0].thumbnail_url;
+
+      const fieldsToUpdate = [];
+      const values = [];
+
+      // req.body에 해당 key가 존재하는지 확인하는 방식으로 변경
+      if (title !== undefined) {
+        fieldsToUpdate.push("title = ?");
+        values.push(title);
+      }
+      if (description !== undefined) {
+        fieldsToUpdate.push("description = ?");
+        values.push(description);
+      }
+      if (price !== undefined) {
+        fieldsToUpdate.push("price = ?");
+        values.push(parseFloat(price) || 0);
+      } // 숫자로 변환
+
+      // (★★핵심 수정★★) discount_price 존재 여부 확인 및 null 처리
+      if (discount_price !== undefined) {
+        fieldsToUpdate.push("discount_price = ?");
+        // 'null' 문자열 또는 빈 문자열이면 DB null로, 아니면 숫자로 변환
+        values.push(
+          discount_price === "null" || discount_price === ""
+            ? null
+            : parseFloat(discount_price)
+        );
+      }
+
+      // 썸네일 URL 업데이트 (thumbnailUrl이 undefined가 아닐 때만)
+      if (thumbnailUrl !== undefined) {
+        fieldsToUpdate.push("thumbnail_url = ?");
+        values.push(thumbnailUrl);
+        // TODO: thumbnailUrl이 null이거나 새 파일이 업로드되었을 때, 기존 파일(existingThumbnail) 삭제 로직 추가
+      }
+
+      if (fieldsToUpdate.length === 0) {
+        return res.json({ message: "변경된 내용이 없습니다." });
+      }
+
+      values.push(courseId);
+      const sql = `UPDATE courses SET ${fieldsToUpdate.join(
+        ", "
+      )} WHERE idx = ?`;
+      await pool.query(sql, values);
+
+      const [updatedCourse] = await pool.query(
+        `SELECT * FROM courses WHERE idx = ?`,
+        [courseId]
+      );
+      res.json(updatedCourse[0]);
+    } catch (error) {
+      console.error("강좌 수정 중 오류:", error);
+      res.status(500).json({ message: `강좌 수정 중 오류: ${error}` });
     }
-    if (courseData.description !== undefined) {
-      fieldsToUpdate.push("description = ?");
-      values.push(courseData.description);
-    }
-    if (courseData.price !== undefined) {
-      fieldsToUpdate.push("price = ?");
-      values.push(courseData.price);
-    }
-    // discount_price는 null일 수 있으므로 별도 처리
-    if (courseData.hasOwnProperty("discount_price")) {
-      fieldsToUpdate.push("discount_price = ?");
-      values.push(courseData.discount_price);
-    }
-
-    if (fieldsToUpdate.length === 0) {
-      return res.status(400).json({ message: "수정할 내용이 없습니다." });
-    }
-
-    values.push(courseId); // WHERE 절에 사용할 courseId 추가
-
-    const sql = `UPDATE courses SET ${fieldsToUpdate.join(", ")} WHERE idx = ?`;
-
-    await pool.query(sql, values);
-    // 동적 쿼리 생성 끝
-
-    const [updatedCourse] = await pool.query(
-      `SELECT * FROM courses WHERE idx = ?`,
-      [courseId]
-    );
-    res.json(updatedCourse[0]);
-  } catch (error) {
-    console.error("강좌 수정 중 오류:", error);
-    res.status(500).json({ message: "서버 오류" });
   }
-});
+);
 
 // 5. 특정 강좌에 새 섹션 추가
 // POST /api/courses/:courseId/sections
@@ -211,7 +250,7 @@ router.post("/:courseId/sections", protect, async (req, res) => {
 router.post(
   "/sections/:sectionId/lectures",
   protect,
-  upload.single("video"), // 'video'라는 이름의 파일을 하나 받아서 처리하는 multer 미들웨어
+  uploadVideo.single("video"), // 'video'라는 이름의 파일을 하나 받아서 처리하는 multer 미들웨어
   async (req, res) => {
     const { sectionId } = req.params;
     // multer가 텍스트 필드를 req.body에 채워줍니다.
@@ -452,7 +491,7 @@ router.delete("/sections/:sectionId", protect, async (req, res) => {
 router.put(
   "/lectures/:lectureId",
   protect,
-  upload.single("video"),
+  uploadVideo.single("video"),
   async (req, res) => {
     const { lectureId } = req.params;
     // 아래와 같은 방법은, 무조건 duration_seconds가 body에 담겨있어야 하며, null이 들어갈 경우 수정되지 않는다.

@@ -13,10 +13,7 @@ app.use(express.json()); // JSON 파싱
 
 // '/uploads' 경로로 들어오는 요청에 대해 './uploads' 폴더의 파일을 제공합니다.
 // 예를 들어, /uploads/videos/video-123.mp4 요청이 오면 실제 ./uploads/videos/video-123.mp4 파일을 찾아 보내줍니다.
-app.use(
-  "/uploads/images",
-  express.static(path.join(__dirname, "uploads", "images"))
-);
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 // ------------------------------------
 
 /** 라우터 연결  */

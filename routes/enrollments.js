@@ -9,13 +9,15 @@ const { protect } = require("../middleware/authMiddleWare.js");
 // GET /api/enrollments/my
 router.get("/my", protect, async (req, res) => {
   const user_idx = req.user.userIdx;
+  const connection = await pool.getConnection(); // 트랜잭션 또는 다중 쿼리를 위해 connection 사용
 
   try {
-    const [myCourses] = await pool.query(
+    // 1. 사용자가 수강 중인 강좌 목록 기본 정보 조회 (enrollment idx 포함)
+    const [enrollments] = await connection.query(
       `SELECT 
-                c.idx, c.title, c.thumbnail_url,
-                u.name as instructor_name,
-                e.progress_percent
+                e.idx as enrollment_idx, e.course_idx, e.progress_percent as stored_progress,
+                c.title, c.thumbnail_url,
+                u.name as instructor_name
              FROM enrollments e
              JOIN courses c ON e.course_idx = c.idx
              JOIN users u ON c.instructor_idx = u.idx
@@ -23,10 +25,66 @@ router.get("/my", protect, async (req, res) => {
              ORDER BY e.enrolled_at DESC`,
       [user_idx]
     );
-    res.json(myCourses);
+
+    if (enrollments.length === 0) {
+      await connection.release();
+      return res.json([]); // 빈 배열 반환
+    }
+
+    // 2. 각 수강 건에 대해 최신 진행률 계산 및 업데이트
+    const updatedEnrollments = await Promise.all(
+      enrollments.map(async (enrollment) => {
+        const { enrollment_idx, course_idx, stored_progress } = enrollment;
+
+        // 2-1. 해당 강좌의 현재 총 강의 수 계산
+        const [lectureCountResult] = await connection.query(
+          `SELECT COUNT(l.idx) as total_lectures 
+                 FROM lectures l JOIN sections s ON l.section_idx = s.idx 
+                 WHERE s.course_idx = ?`,
+          [course_idx]
+        );
+        const total_lectures = lectureCountResult[0].total_lectures;
+
+        // 2-2. 해당 수강 건의 완료된 강의 수 계산
+        const [completedCountResult] = await connection.query(
+          `SELECT COUNT(*) as completed_lectures 
+                 FROM lecture_progress 
+                 WHERE enrollment_idx = ? AND is_completed = 1`,
+          [enrollment_idx]
+        );
+        const completed_lectures = completedCountResult[0].completed_lectures;
+
+        // 2-3. 최신 진행률 계산
+        const current_progress =
+          total_lectures > 0
+            ? Math.round((completed_lectures / total_lectures) * 100)
+            : 0;
+
+        // 2-4. DB에 저장된 값과 다르면 업데이트
+        if (current_progress !== stored_progress) {
+          console.log(
+            `Progress mismatch for enrollment ${enrollment_idx}: DB=${stored_progress}, Calculated=${current_progress}. Updating DB.`
+          );
+          await connection.query(
+            `UPDATE enrollments SET progress_percent = ? WHERE idx = ?`,
+            [current_progress, enrollment_idx]
+          );
+        }
+
+        // 최종적으로 반환할 객체에 계산된 최신 진행률 포함
+        return {
+          ...enrollment, // enrollment_idx, course_idx 등 포함
+          progress_percent: current_progress, // stored_progress 대신 최신 값 사용
+        };
+      })
+    );
+
+    res.json(updatedEnrollments);
   } catch (error) {
-    console.error("내 수강 목록 조회 오류:", error);
+    console.error("내 수강 목록 조회 오류 (진행률 계산 포함):", error);
     res.status(500).json({ message: "서버 오류" });
+  } finally {
+    if (connection) connection.release(); // 사용 후 반드시 connection 반환
   }
 });
 
