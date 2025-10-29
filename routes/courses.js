@@ -491,14 +491,17 @@ router.delete("/sections/:sectionId", protect, async (req, res) => {
 router.put(
   "/lectures/:lectureId",
   protect,
-  uploadVideo.single("video"),
+  uploadVideo.single("video"), // 'video'라는 이름의 파일을 받을 수 있도록 multer 미들웨어 추가
   async (req, res) => {
     const { lectureId } = req.params;
-    // 아래와 같은 방법은, 무조건 duration_seconds가 body에 담겨있어야 하며, null이 들어갈 경우 수정되지 않는다.
-    // 제목만 수정할 경우 까지 고려해서 만들어져야 한다.
-    //const { title, duration_seconds } = req.body;
-    const updateFields = req.body;
+    const updateFieldsBody = req.body; // multer가 텍스트 필드를 여기 채워줌
     const instructor_idx = req.user.userIdx;
+
+    // 디버깅 로그 추가
+    console.log("[DEBUG] PUT /lectures/:lectureId");
+    console.log("[DEBUG] lectureId:", lectureId);
+    console.log("[DEBUG] req.body:", updateFieldsBody);
+    console.log("[DEBUG] req.file:", req.file);
 
     try {
       // 보안 검증 (본인 강좌의 강의인지 확인)
@@ -516,36 +519,52 @@ router.put(
         return res.status(403).json({ message: "권한이 없습니다." });
       }
 
-      // **동적 쿼리 생성**
-      const fieldsToUpdate = []; // 업데이트할 필드 (title, )
-      const values = []; // 필드에 삽입될 value 값 모음.
+      // --- 동적으로 UPDATE 쿼리 생성 ---
+      const fieldsToUpdate = [];
+      const values = [];
 
-      // req.body에 포함된 키만 쿼리에 추가
-      if (updateFields.title) {
+      // 텍스트 필드 업데이트
+      if (updateFieldsBody.title !== undefined) {
         fieldsToUpdate.push("title = ?");
-        values.push(updateFields.title);
+        values.push(updateFieldsBody.title);
       }
-      if (updateFields.duration_seconds) {
-        fieldsToUpdate.push("duration_seconds = ?");
-        values.push(updateFields.duration_seconds);
+      if (updateFieldsBody.duration_seconds !== undefined) {
+        // 숫자로 변환 시도, 실패하면 null 또는 0 처리 (DB 스키마에 맞게)
+        const duration = parseInt(updateFieldsBody.duration_seconds, 10);
+        if (!isNaN(duration) && duration >= 0) {
+          fieldsToUpdate.push("duration_seconds = ?");
+          values.push(duration); // 숫자로 저장
+        } else {
+          // DB에서 NOT NULL 제약조건이 있다면 0으로 저장, NULL 허용 시 null로 저장
+          fieldsToUpdate.push("duration_seconds = ?");
+          values.push(0); // 또는 null
+          console.warn(
+            `[WARN] Invalid duration_seconds received: ${updateFieldsBody.duration_seconds}. Setting to 0.`
+          );
+        }
       }
-      // ... 나중에 다른 필드를 수정하고 싶다면 여기에 추가 ...
 
       // 파일 필드 업데이트 (새 파일이 업로드되었을 경우)
       if (req.file) {
         const newVideoUrl = req.file.path.replace(/\\/g, "/");
         fieldsToUpdate.push("video_url = ?");
         values.push(newVideoUrl);
-        // TODO: 여기에 기존에 업로드되었던 영상 파일을 서버에서 삭제하는 로직을 추가하면 좋습니다.
+        // TODO: 기존 파일 삭제 로직
       }
-      // 2순위: 새 파일은 없지만, URL 텍스트가 전달된 경우
-      else if (updateFields.video_url) {
+      // URL 필드 업데이트 (새 파일 없고, URL 텍스트가 전달된 경우)
+      // (★★수정★★) 빈 문자열도 video_url 업데이트로 간주하지 않도록 trim() 추가
+      else if (
+        updateFieldsBody.video_url !== undefined &&
+        updateFieldsBody.video_url.trim()
+      ) {
         fieldsToUpdate.push("video_url = ?");
-        values.push(updateFields.video_url);
+        values.push(updateFieldsBody.video_url.trim());
       }
 
-      if (updateFields.length === 0) {
-        res.status(400).json({ message: "수정 가능한 필드가 없습니다." });
+      // 변경할 내용이 아무것도 없으면 그냥 성공 응답
+      if (fieldsToUpdate.length === 0) {
+        console.log("[DEBUG] No fields to update.");
+        return res.json({ message: "변경된 내용이 없습니다." });
       }
 
       values.push(lectureId); // WHERE 절에 사용할 lectureId 추가
@@ -554,10 +573,16 @@ router.put(
         ", "
       )} WHERE idx = ?`;
 
+      // 디버깅 로그 추가
+      console.log("[DEBUG] Executing SQL:", sql);
+      console.log("[DEBUG] With Values:", values); // ★★★ 이 로그를 확인하세요!
+
       await pool.query(sql, values);
+      // --- 동적 쿼리 생성 끝 ---
 
       res.json({ message: "강의가 성공적으로 수정되었습니다." });
     } catch (error) {
+      // 에러 객체 전체를 로깅하여 상세 정보 확인
       console.error("강의 수정 중 오류:", error);
       res.status(500).json({ message: "서버 오류" });
     }

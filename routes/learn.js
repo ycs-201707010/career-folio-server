@@ -9,12 +9,25 @@ router.get("/course/:courseId", protect, async (req, res) => {
   const { courseId } = req.params;
   const user_idx = req.user.userIdx;
 
+  // ▼▼▼ 로그 추가 ▼▼▼
+  console.log(`[DEBUG] learn/course API called`);
+  console.log(`[DEBUG] User Index from Token: ${user_idx}`);
+  console.log(`[DEBUG] Course ID from URL: ${courseId}`);
+  // ▲▲▲ 로그 추가 ▲▲▲
+
   try {
     // 1. 사용자가 이 강좌를 수강 중인지 확인
     const [enrollments] = await pool.query(
       `SELECT * FROM enrollments WHERE user_idx = ? AND course_idx = ?`,
       [user_idx, courseId]
     );
+
+    // ▼▼▼ 로그 추가 ▼▼▼
+    console.log(
+      `[DEBUG] Enrollment query result (length): ${enrollments.length}`
+    );
+    // ▲▲▲ 로그 추가 ▲▲▲
+
     if (enrollments.length === 0) {
       return res.status(403).json({ message: "수강 중인 강좌가 아닙니다." });
     }
