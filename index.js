@@ -27,6 +27,7 @@ const learnRouter = require("./routes/learn"); // learn 라우터 import
 const videoRouter = require("./routes/video"); // 비디오 라우터 import
 const memosRouter = require("./routes/memos");
 const profileRouter = require("./routes/profile");
+const resumeRouter = require("./routes/resume");
 
 app.use("/api/auth", authRouter); // '/api/auth' 경로로 들어오는 모든 요청을 authRouter가 처리하도록 연결.
 app.use("/api/courses", courseRouter);
@@ -38,6 +39,7 @@ app.use("/api/learn", learnRouter);
 app.use("/api/video", videoRouter);
 app.use("/api/memos", memosRouter);
 app.use("/api/profile", profileRouter);
+app.use("/api/resume", resumeRouter);
 
 // 기본 경로로 이동하면 반환됨
 app.get("/", (req, res) => {
