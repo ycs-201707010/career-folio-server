@@ -10,7 +10,7 @@ const fetchProfileData = async (user_idx) => {
     // 1. 기본 프로필 조회
     const [profileRows] = await connection.query(
       `SELECT 
-         u.username, u.email, u.phone, u.address,  -- 👈 users 테이블의 계정 정보
+         u.name AS username, u.email, u.phone_number AS phone, u.address,  -- 👈 users 테이블의 계정 정보
          p.* -- 👈 profile 테이블의 모든 정보
        FROM users u
        JOIN user_profile p ON u.idx = p.user_idx 

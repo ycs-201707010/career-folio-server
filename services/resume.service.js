@@ -1,6 +1,24 @@
 const pool = require("../db");
 
 /**
+ * 날짜 문자열(ISO)을 'YYYY-MM-DD' 형식으로 변환합니다.
+ * 날짜가 없거나(null) 비어있으면(undefined, "") null을 반환합니다.
+ */
+const formatDateForMySQL = (dateString) => {
+  if (!dateString) {
+    return null;
+  }
+  try {
+    // '2020-03-01T15:00:00.000Z' -> '2020-03-01'
+    return dateString.split("T")[0];
+  } catch (e) {
+    // 혹시 모를 잘못된 형식 방어
+    console.error(`Invalid date string format: ${dateString}`, e);
+    return null;
+  }
+};
+
+/**
  * 이력서 전체 데이터를 트랜잭션으로 일괄 업데이트합니다.
  */
 const bulkUpdateResume = async (user_idx, resumeData) => {
@@ -58,8 +76,8 @@ const bulkUpdateResume = async (user_idx, resumeData) => {
         user_idx,
         exp.company_name,
         exp.position,
-        exp.start_date,
-        exp.end_date,
+        formatDateForMySQL(exp.start_date),
+        formatDateForMySQL(exp.end_date),
         exp.description,
       ]);
 
@@ -97,8 +115,8 @@ const bulkUpdateResume = async (user_idx, resumeData) => {
         edu.institution_name,
         edu.degree,
         edu.major,
-        edu.start_date,
-        edu.end_date,
+        formatDateForMySQL(edu.start_date),
+        formatDateForMySQL(edu.end_date),
       ]);
       const eduSql = `INSERT INTO educations (idx, user_idx, institution_name, degree, major, start_date, end_date) VALUES ? ON DUPLICATE KEY UPDATE institution_name=VALUES(institution_name), degree=VALUES(degree), major=VALUES(major), start_date=VALUES(start_date), end_date=VALUES(end_date)`;
       await connection.query(eduSql, [eduValues]);
@@ -124,8 +142,8 @@ const bulkUpdateResume = async (user_idx, resumeData) => {
         user_idx,
         proj.project_name,
         proj.description,
-        proj.start_date,
-        proj.end_date,
+        formatDateForMySQL(proj.start_date),
+        formatDateForMySQL(proj.end_date),
         proj.project_url,
       ]);
       const projSql = `INSERT INTO projects (idx, user_idx, project_name, description, start_date, end_date, project_url) VALUES ? ON DUPLICATE KEY UPDATE project_name=VALUES(project_name), description=VALUES(description), start_date=VALUES(start_date), end_date=VALUES(end_date), project_url=VALUES(project_url)`;

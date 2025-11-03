@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>이력서</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      body {
+        /* Tailwind의 기본 폰트 시스템을 사용합니다. 
+              (또는 Pretendard 같은 웹 폰트를 link 태그로 추가하셔도 좋습니다) 
+            */
+        font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif,
+          "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol",
+          "Noto Color Emoji";
+        width: 210mm;
+        min-height: 29.7cm;
+        box-sizing: border-box;
+        background-color: white;
+      }
+    </style>
+  </head>
+  <body class="p-12">
+    <% const profile = data.profile; %> <% const experiences = data.experiences;
+    %> <% const educations = data.educations; %> <% const projects =
+    data.projects; %> <% const skills = data.skills; %> <% const formatDate =
+    (dateStr) => { if (!dateStr) return null; return dateStr.split('T')[0]; };
+    %> <% const API_BASE_URL = process.env.VITE_API_BASE_URL ||
+    'http://localhost:8080'; %>
+
+    <header class="flex items-start justify-between mb-6">
+      <div>
+        <h1 class="text-3xl font-bold text-gray-800">
+          <%= profile.resume_title || profile.username %>
+        </h1>
+        <h2 class="text-2xl font-light text-gray-700 mt-1">
+          <%= profile.username %>
+        </h2>
+        <div class="mt-4 space-y-1 text-sm text-gray-600">
+          <% if (profile.email) { %>
+          <p>📧 <%= profile.email %></p>
+          <% } %> <% if (profile.phone) { %>
+          <p>📞 <%= profile.phone %></p>
+          <% } %> <% if (profile.address) { %>
+          <p>📍 <%= profile.address %></p>
+          <% } %>
+        </div>
+      </div>
+      <% if (profile.resume_photo_url) { %>
+      <img
+        src="<%= API_BASE_URL %>/<%= profile.resume_photo_url %>"
+        alt="증명사진"
+        class="w-28 h-36 object-cover rounded-md border-2 border-gray-100"
+      />
+      <% } else { %>
+      <div class="w-28 h-36 bg-gray-200 rounded-md"></div>
+      <% } %>
+    </header>
+
+    <% if (profile.introduction) { %>
+    <section class="mb-8">
+      <h3
+        class="text-2xl font-bold text-gray-800 border-b-2 border-gray-300 pb-1 mb-3"
+      >
+        자기소개
+      </h3>
+      <p class="text-sm whitespace-pre-wrap"><%= profile.introduction %></p>
+    </section>
+    <% } %> <% if (experiences.length > 0) { %>
+    <section class="mb-8">
+      <h3
+        class="text-2xl font-bold text-gray-800 border-b-2 border-gray-300 pb-1 mb-3"
+      >
+        경력 (Experiences)
+      </h3>
+      <% experiences.forEach(function(exp) { %>
+      <div class="mb-4">
+        <h4 class="text-lg font-semibold">
+          <%= exp.position %>
+          <span class="text-base font-normal text-gray-600"
+            >at <%= exp.company_name %></span
+          >
+        </h4>
+        <p class="text-sm text-gray-500">
+          <%= formatDate(exp.start_date) %> ~ <%= formatDate(exp.end_date) ||
+          '현재' %>
+        </p>
+        <p class="text-sm mt-1 whitespace-pre-wrap"><%= exp.description %></p>
+      </div>
+      <% }) %>
+    </section>
+    <% } %> <% if (educations.length > 0) { %>
+    <section class="mb-8">
+      <h3
+        class="text-2xl font-bold text-gray-800 border-b-2 border-gray-300 pb-1 mb-3"
+      >
+        학력 (Education)
+      </h3>
+      <% educations.forEach(function(edu) { %>
+      <div class="mb-3">
+        <h4 class="text-lg font-semibold"><%= edu.institution_name %></h4>
+        <p class="text-sm text-gray-600">
+          <%= edu.degree %> - <%= edu.major %>
+        </p>
+        <p class="text-sm text-gray-500">
+          <%= formatDate(edu.start_date) %> ~ <%= formatDate(edu.end_date) ||
+          '졸업' %>
+        </p>
+      </div>
+      <% }) %>
+    </section>
+    <% } %> <% if (projects.length > 0) { %>
+    <section class="mb-8">
+      <h3
+        class="text-2xl font-bold text-gray-800 border-b-2 border-gray-300 pb-1 mb-3"
+      >
+        프로젝트 (Projects)
+      </h3>
+      <% projects.forEach(function(proj) { %>
+      <div class="mb-4">
+        <h4 class="text-lg font-semibold"><%= proj.project_name %></h4>
+        <p class="text-sm text-gray-500">
+          <%= formatDate(proj.start_date) %> ~ <%= formatDate(proj.end_date) ||
+          '진행 중' %>
+        </p>
+        <% if (proj.project_url) { %><a
+          href="<%= proj.project_url %>"
+          target="_blank"
+          class="text-sm text-blue-500 hover:underline"
+          ><%= proj.project_url %></a
+        ><% } %>
+        <p class="text-sm mt-1 whitespace-pre-wrap"><%= proj.description %></p>
+      </div>
+      <% }) %>
+    </section>
+    <% } %> <% if (skills.length > 0) { %>
+    <section class="mb-8">
+      <h3
+        class="text-2xl font-bold text-gray-800 border-b-2 border-gray-300 pb-1 mb-3"
+      >
+        보유 기술 (Skills)
+      </h3>
+      <div class="mt-1">
+        <% skills.forEach(function(skill) { %>
+        <span
+          class="inline-block bg-blue-100 text-blue-800 text-sm font-medium px-3 py-1 rounded-full mr-2 mb-2"
+        >
+          <%= skill.skill_name %>
+        </span>
+        <% }) %>
+      </div>
+    </section>
+    <% } %>
+  </body>
+</html>
