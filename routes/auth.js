@@ -5,6 +5,7 @@ const jwt = require("jsonwebtoken");
 const bcrypt = require("bcrypt");
 const pool = require("../db"); // DB 커넥션 풀
 const { sendVerificationEmail } = require("../services/emailService"); // 이메일 서비스
+const { awardBadge } = require("../services/badge.service"); // 1. 뱃지 서비스 불러오기
 
 // 이메일 인증코드를 임시로 저장할 객체 (실제 프로덕션에서는 Redis 사용을 권장)
 // { "user@example.com": { code: "123456", expiresAt: 1678886400000, verified: false } }
@@ -115,7 +116,7 @@ router.post("/signup", async (req, res) => {
       `INSERT INTO users (name, email, phone_number) VALUES (?, ?, ?)`,
       [name, email, phoneNumber]
     );
-    const newUserId = userResult.insertId;
+    const newUserId = userResult.insertId; // user_idx
 
     // 2. user_profile 테이블에 초기 프로필 생성
     await connection.query(
@@ -132,9 +133,20 @@ router.post("/signup", async (req, res) => {
 
     await connection.commit(); // 모든 쿼리 성공 시 커밋
 
-    // 성공 후 임시 인증 정보 삭제
-    delete emailVerifications[email];
+    // 회원 관련 트랜잭션 성공 후 뱃지 서비스 호출
+    try {
+      await awardBadge(newUserId, "WELCOME");
+    } catch (badgeError) {
+      // [중요] 뱃지 부여에 실패하더라도, 회원가입 자체는 성공한 것이므로
+      // 에러를 로깅만 하고 롤백하지 않습니다.
+      console.error(
+        `[Badge] WELCOME 뱃지 부여 실패 (User: ${newUserId}):`,
+        badgeError
+      );
+    }
 
+    // 성공 후 임시 인증 정보 삭제, 이후 회원가입 완료 메시지
+    delete emailVerifications[email];
     res.status(201).json({ message: "회원가입이 성공적으로 완료되었습니다." });
   } catch (error) {
     await connection.rollback(); // 오류 발생 시 롤백
