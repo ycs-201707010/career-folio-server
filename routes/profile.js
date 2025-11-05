@@ -326,9 +326,9 @@ const { protect } = require("../middleware/authMiddleWare");
 const { uploadImage } = require("../config/multerConfig"); // 이미지 업로드용 multer 설정
 const fs = require("fs").promises; // 파일 시스템 접근 (파일 삭제용)
 const path = require("path"); // 경로 처리용
+const { fetchProfileData } = require("../services/profile.service");
 
 // --- 내 프로필 및 이력서 정보 관리 API ---
-
 /**
  * @route   GET /api/profile/me
  * @desc    Get current user's full profile and resume data (Joined)
@@ -343,8 +343,8 @@ router.get("/me", protect, async (req, res) => {
     // 2. [수정됨] users와 user_profile을 JOIN하여 모든 기본 정보를 한 번에 가져옴
     const [profileResult] = await pool.query(
       `SELECT 
-         u.name AS username, u.email, u.phone_number AS phone, u.address,  -- users 테이블 정보
-         p.* -- user_profile 테이블의 모든 정보 (nickname, bio, picture_url, resume_photo_url 등)
+         u.name AS username, u.email, u.phone_number AS phone,  -- users 테이블 정보
+         p.* -- user_profile 테이블의 모든 정보 (nickname, bio, address, picture_url, resume_photo_url 등)
        FROM users u
        LEFT JOIN user_profile p ON u.idx = p.user_idx 
        WHERE u.idx = ?`,
@@ -370,7 +370,7 @@ router.get("/me", protect, async (req, res) => {
 
       // 생성 후 다시 조회
       const [newProfileResult] = await pool.query(
-        `SELECT u.name AS username, u.email, u.phone_number AS phone, u.address, p.*
+        `SELECT u.name AS username, u.email, u.phone_number AS phone, p.*
          FROM users u
          LEFT JOIN user_profile p ON u.idx = p.user_idx 
          WHERE u.idx = ?`,
@@ -411,6 +411,41 @@ router.get("/me", protect, async (req, res) => {
     });
   } catch (error) {
     console.error("내 프로필 조회 오류:", error);
+    res.status(500).json({ message: "서버 오류" });
+  }
+});
+
+// ** 사용자의 프로필 창(수정창 아님) **
+/**
+ * @route   GET /api/profile/:id
+ * @desc    Get a user's public profile by their string ID (from user_credentials)
+ * @access  Public
+ */
+router.get("/:id", async (req, res) => {
+  // 1. URL 파라미터에서 사용자 ID (예: 'king-gwangpil')를 가져옵니다.
+  const targetId = req.params.id;
+
+  try {
+    // 2. ID를 기반으로 user_idx를 찾습니다.
+    const [[credential]] = await pool.query(
+      "SELECT user_idx FROM user_credentials WHERE id = ?",
+      [targetId]
+    );
+
+    if (!credential) {
+      return res.status(404).json({ message: "사용자를 찾을 수 없습니다." });
+    }
+
+    const user_idx = credential.user_idx;
+
+    // 3. [재활용] 이 user_idx를 사용해 기존 profile.service의 fetchProfileData 함수를 호출합니다.
+    const profileData = await fetchProfileData(user_idx);
+
+    // 4. [보안] 민감한 정보(email, phone, address 등)를 제거하고 반환합니다.
+    // (이건 정책에 따라 다름. 지금은 일단 전부 보낸다고 가정하고, 나중에 분리합니다.)
+    res.json(profileData);
+  } catch (error) {
+    console.error(`공개 프로필 조회 오류 (ID: ${targetId}):`, error);
     res.status(500).json({ message: "서버 오류" });
   }
 });
@@ -479,6 +514,10 @@ router.put(
         fieldsToUpdate.push("bio = ?");
         values.push(profileData.bio);
       }
+      if (profileData.address !== undefined) {
+        fieldsToUpdate.push("address = ?");
+        values.push(profileData.address);
+      }
       if (pictureUrl !== undefined) {
         fieldsToUpdate.push("picture_url = ?");
         values.push(pictureUrl);
@@ -514,6 +553,68 @@ router.put(
           console.error(`Error deleting temp file:`, cleanupError);
         }
       }
+      res.status(500).json({ message: "서버 오류" });
+    }
+  }
+);
+
+/**
+ * @route   PUT /api/profile/resume-photo
+ * @desc    Update resume photo (resume_photo_url)
+ * @access  Private
+ */
+router.put(
+  "/resume-photo",
+  protect,
+  uploadImage.single("resume_photo"), // 👈 'resume_photo'라는 이름의 파일
+  async (req, res) => {
+    const user_idx = req.user.userIdx;
+    console.log(
+      `[PUT /api/profile/resume-photo] Uploading for user: ${user_idx}`
+    );
+
+    if (!req.file) {
+      return res.status(400).json({ message: "이미지 파일이 필요합니다." });
+    }
+
+    const newPhotoUrl = req.file.path.replace(/\\/g, "/");
+
+    try {
+      // 1. 기존 증명사진 경로 조회
+      const [[existingProfile]] = await pool.query(
+        "SELECT resume_photo_url FROM user_profile WHERE user_idx = ?",
+        [user_idx]
+      );
+      const oldPhotoUrl = existingProfile?.resume_photo_url;
+
+      // 2. 새 이미지 경로로 DB 업데이트
+      await pool.query(
+        "UPDATE user_profile SET resume_photo_url = ? WHERE user_idx = ?",
+        [newPhotoUrl, user_idx]
+      );
+
+      // 3. 기존 증명사진 파일 삭제 (있었다면)
+      if (oldPhotoUrl) {
+        try {
+          const filePath = path.join(__dirname, "..", oldPhotoUrl);
+          await fs.unlink(filePath);
+          console.log(`Deleted old resume photo: ${filePath}`);
+        } catch (unlinkError) {
+          console.error(
+            `Error deleting old photo ${oldPhotoUrl}:`,
+            unlinkError.code !== "ENOENT" ? unlinkError : "(File not found)"
+          );
+        }
+      }
+
+      // 4. 프론트엔드가 즉시 상태를 업데이트할 수 있도록 새 URL 반환
+      res.json({ resume_photo_url: newPhotoUrl });
+    } catch (error) {
+      console.error("증명사진 업로드 오류:", error);
+      // 오류 발생 시 방금 업로드된 새 파일 삭제
+      try {
+        await fs.unlink(req.file.path);
+      } catch (e) {}
       res.status(500).json({ message: "서버 오류" });
     }
   }

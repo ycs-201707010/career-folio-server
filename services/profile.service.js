@@ -8,15 +8,22 @@ const fetchProfileData = async (user_idx) => {
 
   try {
     // 1. 기본 프로필 조회
-    const [profileRows] = await connection.query(
+    const [profileRows] = await pool.query(
       `SELECT 
-         u.name AS username, u.email, u.phone_number AS phone, u.address,  -- 👈 users 테이블의 계정 정보
-         p.* -- 👈 profile 테이블의 모든 정보
+         u.name AS username, 
+         p.*, 
+         -- 1. 만약 p.resume_email이 NULL이면, u.email을 'email'이라는 별명으로 사용
+         COALESCE(p.resume_email, u.email) AS email,
+         -- 2. 만약 p.resume_phone이 NULL이면, u.phone_number를 'phone'이라는 별명으로 사용
+         COALESCE(p.resume_phone, u.phone_number) AS phone,
+         -- 3. [Turn 55 수정] p.address를 'address' 별명으로 사용
+         p.address AS address
        FROM users u
-       JOIN user_profile p ON u.idx = p.user_idx 
+       LEFT JOIN user_profile p ON u.idx = p.user_idx 
        WHERE u.idx = ?`,
       [user_idx]
     );
+
     const profile = profileRows[0];
 
     if (!profile) {

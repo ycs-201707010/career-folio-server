@@ -38,7 +38,10 @@ const bulkUpdateResume = async (user_idx, resumeData) => {
           nickname = ?, bio = ?, 
           resume_photo_url = ?,   -- 👈 추가
           resume_title = ?,     -- 👈 추가
-          introduction = ?      -- 👈 추가
+          introduction = ?,      -- 👈 추가
+          address = ?,
+          resume_email = ?,   -- 👈 추가
+          resume_phone = ?    -- 👈 추가
          WHERE user_idx = ?`,
         [
           profile.nickname,
@@ -46,6 +49,9 @@ const bulkUpdateResume = async (user_idx, resumeData) => {
           profile.resume_photo_url,
           profile.resume_title,
           profile.introduction,
+          profile.address,
+          profile.email, // 👈 'profile.email'이 'resume_email'로 저장됨
+          profile.phone, // 👈 'profile.phone'이 'resume_phone'으로 저장됨
           user_idx,
         ]
       );
