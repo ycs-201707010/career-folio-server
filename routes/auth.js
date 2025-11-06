@@ -97,7 +97,7 @@ router.post("/verify-code", (req, res) => {
 // 4. 최종 회원가입 API
 // POST /api/auth/signup
 router.post("/signup", async (req, res) => {
-  const { name, email, phoneNumber, id, password } = req.body;
+  const { name, email, id, password } = req.body;
 
   // 이메일 인증 여부 확인
   const verification = emailVerifications[email];
@@ -113,8 +113,8 @@ router.post("/signup", async (req, res) => {
 
     // 1. users 테이블에 사용자 정보 삽입
     const [userResult] = await connection.query(
-      `INSERT INTO users (name, email, phone_number) VALUES (?, ?, ?)`,
-      [name, email, phoneNumber]
+      `INSERT INTO users (name, email) VALUES (?, ?)`,
+      [name, email]
     );
     const newUserId = userResult.insertId; // user_idx
 
@@ -217,6 +217,7 @@ router.post("/login", async (req, res) => {
     const token = jwt.sign(
       {
         userIdx: user.idx,
+        id: credential.id,
         name: user.name,
         email: user.email,
         nickname: user.nickname,
@@ -230,7 +231,7 @@ router.post("/login", async (req, res) => {
     res.json({
       message: "로그인 성공!",
       token,
-      user,
+      user: { ...user, id: credential.id },
     });
   } catch (error) {
     console.error("로그인 중 DB 오류:", error);

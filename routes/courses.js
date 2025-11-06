@@ -607,16 +607,34 @@ router.delete("/lectures/:lectureId", protect, async (req, res) => {
 // 13. 게시된 모든 강좌 목록 조회 (공개용)
 // GET /api/courses
 router.get("/", async (req, res) => {
+  // 검색 기능 구현을 위해, 클라이언트에서 search 파라미터를 전달받음
+  const { search } = req.query;
+
   try {
-    const [courses] = await pool.query(
-      `SELECT c.idx, c.title, c.description, c.thumbnail_url, c.price, c.discount_price, 
-                c.avg_rating, c.review_count, c.enrollment_count,
-                u.name as instructor_name 
-             FROM courses c
-             JOIN users u ON c.instructor_idx = u.idx
-             WHERE c.status = 'published'
-             ORDER BY c.created_at DESC`
-    );
+    // SQL문을 동적으로 구성.
+    let sql = `
+      SELECT 
+        c.idx, c.title, c.description, c.thumbnail_url, c.price, c.discount_price, 
+        c.avg_rating, c.review_count, c.enrollment_count,
+        u.name as instructor_name 
+      FROM courses c
+      JOIN users u ON c.instructor_idx = u.idx
+      WHERE c.status = 'published'
+    `;
+    const params = []; // 검색 기능을 위해 필터링 역할을 할 파라미터 (Where 절의 조건)
+
+    // 3. [추가] search 파라미터가 존재하면, WHERE 절을 추가합니다.
+    if (search && search.trim() !== "") {
+      const searchTerm = `%${search.trim()}%`;
+      // (제목, 설명, 강사 이름에서 검색)
+      sql += ` AND (c.title LIKE ? OR c.description LIKE ? OR u.name LIKE ?)`;
+      params.push(searchTerm, searchTerm, searchTerm);
+    }
+
+    sql += " ORDER BY c.created_at DESC";
+
+    // 4. [수정] 동적으로 생성된 SQL과 파라미터로 쿼리 실행
+    const [courses] = await pool.query(sql, params);
 
     res.json(courses);
   } catch (error) {
