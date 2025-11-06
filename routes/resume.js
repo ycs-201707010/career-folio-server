@@ -1,6 +1,7 @@
 // routes/resume.js
 const express = require("express");
 const router = express.Router();
+const pool = require("../db"); // DB 연결 풀
 // 1. 사용자님의 인증 미들웨어 경로와 이름(protect)으로 변경
 const { protect } = require("../middleware/authMiddleWare");
 // 2. 서비스 파일 require
@@ -10,6 +11,76 @@ const { fetchProfileData } = require("../services/profile.service.js");
 const puppeteer = require("puppeteer");
 const ejs = require("ejs");
 const path = require("path");
+
+// --- 👇 [신규 추가] 이력서 빌더 데이터 로드 API ---
+/**
+ * @route   GET /api/resume/me
+ * @desc    Get current user's full data FOR RESUME BUILDER
+ * @access  Private
+ */
+router.get("/me", protect, async (req, res) => {
+  const user_idx = req.user.userIdx;
+  console.log(
+    `[GET /api/resume/me] Fetching data for builder (User: ${user_idx})`
+  );
+
+  try {
+    // 1. [이관] profile.js에 있던 "COALESCE 쿼리"를 그대로 가져옴
+    const [profileResult] = await pool.query(
+      `SELECT 
+         u.name AS username, 
+         p.*, 
+         COALESCE(p.resume_email, u.email) AS email,
+         COALESCE(p.resume_phone, u.phone_number) AS phone,
+         p.address AS address 
+       FROM users u
+       LEFT JOIN user_profile p ON u.idx = p.user_idx 
+       WHERE u.idx = ?`,
+      [user_idx]
+    );
+    let profile = profileResult[0];
+
+    // (프로필 생성 로직 - auth.js로 이동했으므로 여기선 불필요)
+    if (!profile) {
+      return res
+        .status(404)
+        .json({ message: "프로필 정보를 찾을 수 없습니다." });
+    }
+
+    // 2. 모든 이력 항목 조회
+    const [[experiences], [educations], [projects], [skills]] =
+      await Promise.all([
+        pool.query(
+          "SELECT * FROM experiences WHERE user_idx = ? ORDER BY start_date DESC",
+          [user_idx]
+        ),
+        pool.query(
+          "SELECT * FROM educations WHERE user_idx = ? ORDER BY start_date DESC",
+          [user_idx]
+        ),
+        pool.query(
+          "SELECT * FROM projects WHERE user_idx = ? ORDER BY start_date DESC",
+          [user_idx]
+        ),
+        pool.query(
+          "SELECT * FROM skills WHERE user_idx = ? ORDER BY category, skill_name",
+          [user_idx]
+        ),
+      ]);
+
+    // 3. 이력서 빌더용 데이터 전송
+    res.json({
+      profile: profile,
+      experiences,
+      educations,
+      projects,
+      skills,
+    });
+  } catch (error) {
+    console.error("이력서 빌더 데이터 조회 오류:", error);
+    res.status(500).json({ message: "서버 오류" });
+  }
+});
 
 // [PUT] /api/resume/bulk-update
 // 3. 미들웨어를 'auth' 대신 'protect'로 변경

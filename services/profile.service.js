@@ -11,10 +11,8 @@ const fetchProfileData = async (user_idx) => {
     const [profileRows] = await pool.query(
       `SELECT 
          u.name AS username, 
-         p.*, 
-         -- 1. 만약 p.resume_email이 NULL이면, u.email을 'email'이라는 별명으로 사용
+         p.*,
          COALESCE(p.resume_email, u.email) AS email,
-         -- 2. 만약 p.resume_phone이 NULL이면, u.phone_number를 'phone'이라는 별명으로 사용
          COALESCE(p.resume_phone, u.phone_number) AS phone,
          -- 3. [Turn 55 수정] p.address를 'address' 별명으로 사용
          p.address AS address
