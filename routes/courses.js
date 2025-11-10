@@ -56,7 +56,14 @@ router.get("/my-courses", protect, async (req, res) => {
   const instructor_idx = req.user.userIdx;
   try {
     const [courses] = await pool.query(
-      `SELECT * FROM courses WHERE instructor_idx = ? ORDER BY created_at DESC`,
+      `SELECT 
+        c.idx, c.title, c.thumbnail_url, c.price, c.discount_price, 
+        c.avg_rating, c.review_count, c.enrollment_count, c.status,
+        u.name as instructor_name 
+      FROM courses c
+      JOIN users u ON c.instructor_idx = u.idx
+      WHERE c.instructor_idx = ?
+      ORDER BY c.created_at DESC`,
       [instructor_idx]
     );
     res.json(courses);
@@ -118,8 +125,10 @@ router.put(
   async (req, res) => {
     const { courseId } = req.params;
     // courseData 대신 req.body를 직접 사용하고, 각 필드를 명시적으로 확인합니다.
-    const { title, description, price, discount_price } = req.body;
+    const { title, description, price, discount_price, status } = req.body;
     const instructor_idx = req.user.userIdx;
+    const is_verified = req.user.is_verified_instructor; // 강사 검증 여부 확인
+
     let thumbnailUrl = undefined;
 
     if (req.file) {
@@ -176,6 +185,25 @@ router.put(
         fieldsToUpdate.push("thumbnail_url = ?");
         values.push(thumbnailUrl);
         // TODO: thumbnailUrl이 null이거나 새 파일이 업로드되었을 때, 기존 파일(existingThumbnail) 삭제 로직 추가
+      }
+
+      let finalStatus = undefined;
+
+      // 1. status 변경 요청이 있을 때만
+      if (status !== undefined) {
+        // 2. "게시" 요청이고, "미검증" 강사라면
+        if (status === "published" && !is_verified) {
+          finalStatus = "pending"; // "검수 대기"로 강제 변경
+          console.log(
+            `[Course Update] 미검증 강사(${instructor_idx})의 게시 요청 -> PENDING`
+          );
+        } else {
+          // 3. (검증된 강사의 게시 요청) 또는 (draft, archived 등 기타 요청)
+          finalStatus = status;
+        }
+
+        fieldsToUpdate.push("status = ?");
+        values.push(finalStatus);
       }
 
       if (fieldsToUpdate.length === 0) {
@@ -245,6 +273,46 @@ router.post("/:courseId/sections", protect, async (req, res) => {
   }
 });
 
+// ** 강좌가 'published'일 때 변경 권한이 있는지 확인 **
+const checkModificationPermission = async (req, sectionId) => {
+  const [sectionCheck] = await pool.query(
+    `SELECT 
+       c.instructor_idx, c.status, u.is_verified_instructor
+     FROM sections s 
+     JOIN courses c ON s.course_idx = c.idx
+     JOIN users u ON c.instructor_idx = u.idx
+     WHERE s.idx = ?`,
+    [sectionId]
+  );
+
+  if (sectionCheck.length === 0) {
+    throw new Error(404, "섹션을 찾을 수 없습니다.");
+  }
+
+  const course = sectionCheck[0];
+  const instructor_idx = req.user.userIdx;
+
+  if (course.instructor_idx !== instructor_idx) {
+    throw new Error(403, "권한이 없습니다.");
+  }
+
+  // [핵심 로직]
+  // 1. 강좌가 'published' 상태이고,
+  // 2. 강사가 '미검증' 상태라면
+  if (course.status === "published" && !course.is_verified_instructor) {
+    // 3. 변경을 허용하는 대신, 강좌 전체를 'pending'으로 되돌림
+    await pool.query(
+      "UPDATE courses SET status = 'pending' WHERE idx = (SELECT course_idx FROM sections WHERE idx = ?)",
+      [sectionId]
+    );
+    console.log(
+      `[Content Change] 미검증 강사(${instructor_idx})가 게시된 강좌를 수정하여 PENDING으로 변경됩니다.`
+    );
+  }
+
+  // (검증된 강사거나, 'draft' 상태라면 그냥 통과)
+};
+
 // 6. 특정 섹션에 새 강의 추가 (★★파일 업로드 기능 적용★★)
 // POST /api/courses/sections/:sectionId/lectures
 router.post(
@@ -292,6 +360,8 @@ router.post(
     }
 
     try {
+      await checkModificationPermission(req, sectionId);
+
       // (보안 검증 로직은 이전과 동일)
       const [sectionCheck] = await pool.query(
         `SELECT c.instructor_idx FROM sections s JOIN courses c ON s.course_idx = c.idx WHERE s.idx = ?`,
@@ -323,6 +393,11 @@ router.post(
       res.status(201).json(newLecture[0]);
     } catch (error) {
       console.error("강의 생성 중 오류:", error);
+      // (Error 객체에 status 코드를 담아 처리하면 더 좋습니다)
+      if (error.message.startsWith("403"))
+        return res.status(403).json({ message: "권한이 없습니다." });
+      if (error.message.startsWith("404"))
+        return res.status(404).json({ message: "섹션을 찾을 수 없습니다." });
       res.status(500).json({ message: "서버 오류" });
     }
   }
@@ -505,19 +580,16 @@ router.put(
 
     try {
       // 보안 검증 (본인 강좌의 강의인지 확인)
-      const [lectureCheck] = await pool.query(
-        `SELECT c.instructor_idx FROM lectures l
-                 JOIN sections s ON l.section_idx = s.idx
-                 JOIN courses c ON s.course_idx = c.idx
-                 WHERE l.idx = ?`,
+      // 1. lectureId로 sectionId를 먼저 찾습니다.
+      const [[lecture]] = await pool.query(
+        "SELECT section_idx FROM lectures WHERE idx = ?",
         [lectureId]
       );
-      if (
-        lectureCheck.length === 0 ||
-        lectureCheck[0].instructor_idx !== instructor_idx
-      ) {
-        return res.status(403).json({ message: "권한이 없습니다." });
-      }
+      if (!lecture)
+        return res.status(404).json({ message: "강의를 찾을 수 없습니다." });
+
+      // 2. 권한 및 상태 확인
+      await checkModificationPermission(req, lecture.section_idx);
 
       // --- 동적으로 UPDATE 쿼리 생성 ---
       const fieldsToUpdate = [];
@@ -608,10 +680,9 @@ router.delete("/lectures/:lectureId", protect, async (req, res) => {
 // GET /api/courses
 router.get("/", async (req, res) => {
   // 검색 기능 구현을 위해, 클라이언트에서 search 파라미터를 전달받음
-  const { search } = req.query;
+  const { search, sort, filter } = req.query; // sort, filter 파라미터 또한 받기
 
   try {
-    // SQL문을 동적으로 구성.
     let sql = `
       SELECT 
         c.idx, c.title, c.description, c.thumbnail_url, c.price, c.discount_price, 
@@ -621,21 +692,36 @@ router.get("/", async (req, res) => {
       JOIN users u ON c.instructor_idx = u.idx
       WHERE c.status = 'published'
     `;
-    const params = []; // 검색 기능을 위해 필터링 역할을 할 파라미터 (Where 절의 조건)
+    const params = [];
 
-    // 3. [추가] search 파라미터가 존재하면, WHERE 절을 추가합니다.
+    // 2. 검색어 (Search)
     if (search && search.trim() !== "") {
       const searchTerm = `%${search.trim()}%`;
-      // (제목, 설명, 강사 이름에서 검색)
       sql += ` AND (c.title LIKE ? OR c.description LIKE ? OR u.name LIKE ?)`;
       params.push(searchTerm, searchTerm, searchTerm);
     }
 
-    sql += " ORDER BY c.created_at DESC";
+    // 3. 필터 (Filter)
+    if (filter === "free") {
+      sql += ` AND (c.price = 0 OR c.discount_price = 0)`;
+    } else if (filter === "paid") {
+      sql += ` AND (c.price > 0)`;
+    }
 
-    // 4. [수정] 동적으로 생성된 SQL과 파라미터로 쿼리 실행
+    // 4. 정렬 (Order By)
+    let orderBy = " ORDER BY c.created_at DESC"; // 기본값: 최신순
+    if (sort === "price_asc") {
+      orderBy =
+        " ORDER BY (CASE WHEN c.discount_price IS NOT NULL THEN c.discount_price ELSE c.price END) ASC, c.created_at DESC";
+    } else if (sort === "price_desc") {
+      orderBy =
+        " ORDER BY (CASE WHEN c.discount_price IS NOT NULL THEN c.discount_price ELSE c.price END) DESC, c.created_at DESC";
+    } else if (sort === "rating_desc") {
+      orderBy = " ORDER BY c.avg_rating DESC, c.created_at DESC";
+    }
+    sql += orderBy;
+
     const [courses] = await pool.query(sql, params);
-
     res.json(courses);
   } catch (error) {
     console.error("전체 강좌 목록 조회 중 오류:", error);

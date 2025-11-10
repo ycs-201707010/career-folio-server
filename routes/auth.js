@@ -198,7 +198,7 @@ router.post("/login", async (req, res) => {
 
     // 3. users 테이블과 user_profile 테이블에서 사용자 정보 조회
     const [users] = await pool.query(
-      `SELECT u.idx, u.name, u.email, up.nickname, u.role
+      `SELECT u.idx, u.name, u.email, up.nickname, u.role, u.is_verified_instructor
              FROM users u 
              JOIN user_profile up ON u.idx = up.user_idx 
              WHERE u.idx = ?`,
@@ -218,6 +218,7 @@ router.post("/login", async (req, res) => {
       {
         userIdx: user.idx,
         id: credential.id,
+        is_verified_instructor: user.is_verified_instructor, // 인증된 강사인지
         name: user.name,
         email: user.email,
         nickname: user.nickname,

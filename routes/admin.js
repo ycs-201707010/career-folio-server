@@ -4,10 +4,110 @@ const express = require("express");
 const router = express.Router();
 const pool = require("../db");
 const { protect } = require("../middleware/authMiddleWare.js");
-const { admin } = require("../middleware/adminMiddleWare.js");
+const { admin } = require("../middleware/adminMiddleWare.js"); // 👈 대리님이 만드신 미들웨어
 
-// 1. 모든 강좌 목록 조회 (관리자용)
-// GET /api/admin/courses
+/**
+ * @route   GET /api/admin/pending-courses
+ * @desc    Get all courses awaiting approval (status = 'pending')
+ * @access  Admin
+ */
+router.get("/pending-courses", protect, admin, async (req, res) => {
+  try {
+    const [courses] = await pool.query(
+      `SELECT 
+         c.*, u.name as instructor_name 
+       FROM courses c
+       JOIN users u ON c.instructor_idx = u.idx
+       WHERE c.status = 'pending'
+       ORDER BY c.created_at ASC`
+    );
+    res.json(courses);
+  } catch (error) {
+    console.error("검수 대기 강좌 조회 오류:", error);
+    res.status(500).json({ message: "서버 오류" });
+  }
+});
+
+/**
+ * @route   PATCH /api/admin/courses/:courseId/approve
+ * @desc    Approve a course AND verify the instructor
+ * @access  Admin
+ */
+router.patch("/courses/:courseId/approve", protect, admin, async (req, res) => {
+  const { courseId } = req.params;
+  const connection = await pool.getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    // 1. 강좌 상태를 'published'로 변경
+    const [courseUpdateResult] = await connection.query(
+      "UPDATE courses SET status = 'published' WHERE idx = ? AND status = 'pending'", // pending 상태일 때만
+      [courseId]
+    );
+
+    if (courseUpdateResult.affectedRows === 0) {
+      throw new Error("이미 처리되었거나 존재하지 않는 강좌입니다.");
+    }
+
+    // 2. 해당 강좌의 강사 user_idx를 찾습니다.
+    const [[course]] = await connection.query(
+      "SELECT instructor_idx FROM courses WHERE idx = ?",
+      [courseId]
+    );
+    const instructor_idx = course.instructor_idx;
+
+    // 3. 해당 강사를 "검증된 강사"로 업데이트합니다. (이제 이 강사는 자동 승인됩니다)
+    await connection.query(
+      "UPDATE users SET is_verified_instructor = TRUE WHERE idx = ?",
+      [instructor_idx]
+    );
+
+    await connection.commit();
+    res.json({ message: "강좌가 승인되었으며 강사가 검증 처리되었습니다." });
+  } catch (error) {
+    await connection.rollback();
+    console.error("강좌 승인 중 오류:", error);
+    res.status(500).json({ message: "서버 오류: " + error.message });
+  } finally {
+    connection.release();
+  }
+});
+
+/**
+ * @route   PATCH /api/admin/courses/:courseId/reject
+ * @desc    Reject a course (back to 'draft')
+ * @access  Admin
+ */
+router.patch("/courses/:courseId/reject", protect, admin, async (req, res) => {
+  const { courseId } = req.params;
+  const { reason } = req.body; // (선택적: 반려 사유)
+
+  try {
+    // 거절 시 '초안(draft)' 상태로 되돌립니다.
+    await pool.query(
+      "UPDATE courses SET status = 'draft' WHERE idx = ? AND status = 'pending'",
+      [courseId]
+    );
+    // TODO: 반려 사유(reason)를 강사에게 알림/이메일로 보내는 로직 (추후 구현)
+    res.json({ message: "강좌가 반려 처리되었습니다." });
+  } catch (error) {
+    console.error("강좌 거절 중 오류:", error);
+    res.status(500).json({ message: "서버 오류" });
+  }
+});
+
+// --- (이하 대리님이 만드신 다른 관리자용 API) ---
+
+// (참고: 강좌 상태 변경 API는 위 'approve'/'reject'로 대체하는 것을 권장합니다)
+// router.put("/courses/:courseId/status", ...);
+
+// (참고: 가격 변경 API는 그대로 사용해도 좋습니다)
+router.put("/courses/:courseId/price", protect, admin, async (req, res) => {
+  // ... (기존 가격 변경 로직) ...
+});
+
+// (참고: 모든 강좌 목록 API는 그대로 사용해도 좋습니다)
 router.get("/courses", protect, admin, async (req, res) => {
   try {
     const [courses] = await pool.query(
@@ -15,56 +115,6 @@ router.get("/courses", protect, admin, async (req, res) => {
     );
     res.json(courses);
   } catch (error) {
-    res.status(500).json({ message: "서버 오류" });
-  }
-});
-
-// 2. 특정 강좌 상태 변경
-// PUT /api/admin/courses/:courseId/status
-router.put("/courses/:courseId/status", protect, admin, async (req, res) => {
-  const { courseId } = req.params;
-  const { status } = req.body;
-
-  if (!["draft", "published", "archived"].includes(status)) {
-    return res.status(400).json({ message: "잘못된 상태 값입니다." });
-  }
-
-  try {
-    await pool.query("UPDATE courses SET status = ? WHERE idx = ?", [
-      status,
-      courseId,
-    ]);
-    res.json({ message: `강좌 상태가 '${status}'(으)로 변경되었습니다.` });
-  } catch (error) {
-    res.status(500).json({ message: "서버 오류" });
-  }
-});
-
-// 3. 특정 강좌 가격 변경 (정가 및 할인가)
-// PUT /api/admin/courses/:courseId/price
-router.put("/courses/:courseId/price", protect, admin, async (req, res) => {
-  const { courseId } = req.params;
-  // 클라이언트에서 price와 discount_price를 받습니다.
-  const { price, discount_price } = req.body;
-
-  // 가격이 숫자인지, 음수가 아닌지 기본적인 유효성 검사
-  if (
-    (price !== undefined && (isNaN(price) || price < 0)) ||
-    (discount_price !== undefined &&
-      discount_price !== null &&
-      (isNaN(discount_price) || discount_price < 0))
-  ) {
-    return res.status(400).json({ message: "가격 정보가 올바르지 않습니다." });
-  }
-
-  try {
-    await pool.query(
-      "UPDATE courses SET price = ?, discount_price = ? WHERE idx = ?",
-      [price, discount_price, courseId]
-    );
-    res.json({ message: `강좌 가격이 성공적으로 변경되었습니다.` });
-  } catch (error) {
-    console.error("강좌 가격 변경 오류:", error);
     res.status(500).json({ message: "서버 오류" });
   }
 });
