@@ -4,6 +4,8 @@
 const express = require("express");
 const router = express.Router();
 const pool = require("../db");
+const jwt = require("jsonwebtoken");
+require("dotenv").config();
 // 로그인 인증 기능을 수행할 미들웨어
 const { protect } = require("../middleware/authMiddleWare.js");
 const { uploadImage, uploadVideo } = require("../config/multerConfig");
@@ -733,6 +735,24 @@ router.get("/", async (req, res) => {
 // GET /api/courses/public/:courseId
 router.get("/public/:courseId", async (req, res) => {
   const { courseId } = req.params;
+  let user_idx = null;
+
+  const token = req.headers.authorization?.split(" ")[1];
+
+  console.log(
+    `토큰이 전달된건가요? : ${req.headers.authorization?.split(" ")[1]}`
+  );
+
+  if (token) {
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      user_idx = decoded.userIdx;
+    } catch (e) {
+      // 토큰이 유효하지 않아도 그냥 무시 (비로그인시에도 가능한 공개 페이지이기 때문)
+    }
+  }
+
+  console.log(user_idx);
 
   try {
     // 1. 강좌 기본 정보 및 강사 정보 조회
@@ -771,7 +791,17 @@ router.get("/public/:courseId", async (req, res) => {
 
     // TODO: 해당 강좌의 수강 후기 목록 조회
 
-    res.json({ ...course, sections });
+    // (userIdx가 존재할 시)수강 정보 조회
+    let enrollment = null;
+    if (user_idx) {
+      const [enrollmentRows] = await pool.query(
+        "SELECT * FROM enrollments WHERE user_idx = ? AND course_idx = ?",
+        [user_idx, courseId]
+      );
+      enrollment = enrollmentRows[0] || null;
+    }
+
+    res.json({ ...course, sections, enrollment });
   } catch (error) {
     console.error("공개 강좌 상세 조회 중 오류:", error);
     res.status(500).json({ message: "서버 오류" });

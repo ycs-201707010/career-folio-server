@@ -66,6 +66,60 @@ router.get("/course/:courseId", protect, async (req, res) => {
   }
 });
 
+// 학습 진행률 계산 함수
+const recalculateProgress = async (enrollment_idx) => {
+  const connection = await pool.getConnection();
+  try {
+    // 1. 이 수강 건이 어떤 강좌(course_idx)인지 확인
+    const [[enrollment]] = await connection.query(
+      "SELECT course_idx FROM enrollments WHERE idx = ?",
+      [enrollment_idx]
+    );
+    if (!enrollment) throw new Error("수강 정보를 찾을 수 없습니다.");
+
+    const course_idx = enrollment.course_idx;
+
+    // 2. 강좌의 "총 강의 수" 계산
+    const [[courseTotal]] = await connection.query(
+      `SELECT COUNT(l.idx) as totalLectures 
+       FROM lectures l
+       JOIN sections s ON l.section_idx = s.idx
+       WHERE s.course_idx = ?`,
+      [course_idx]
+    );
+    const totalLectures = courseTotal.totalLectures;
+    if (totalLectures === 0) return 0; // 강의가 없으면 0%
+
+    // 3. "완료된 강의 수" 계산
+    const [[progressTotal]] = await connection.query(
+      `SELECT COUNT(idx) as completedLectures 
+       FROM lecture_progress 
+       WHERE enrollment_idx = ? AND is_completed = 1`,
+      [enrollment_idx]
+    );
+    const completedLectures = progressTotal.completedLectures;
+
+    // 4. 백분율 계산
+    const progressPercent = Math.floor(
+      (completedLectures / totalLectures) * 100
+    );
+
+    // 5. enrollments 테이블에 최종 진행률 업데이트
+    await connection.query(
+      "UPDATE enrollments SET progress_percent = ? WHERE idx = ?",
+      [progressPercent, enrollment_idx]
+    );
+
+    return progressPercent;
+  } catch (error) {
+    console.error("진행률 재계산 실패:", error);
+    // 이 함수는 다른 API 내부에서 호출되므로, 에러를 던져서 트랜잭션을 롤백시킴
+    throw error;
+  } finally {
+    connection.release();
+  }
+};
+
 // 2. 강의 시청 진행률 업데이트
 // POST /api/learn/progress
 router.post("/progress", protect, async (req, res) => {
