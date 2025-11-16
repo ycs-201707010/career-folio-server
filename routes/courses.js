@@ -10,7 +10,84 @@ require("dotenv").config();
 const { protect } = require("../middleware/authMiddleWare.js");
 const { uploadImage, uploadVideo } = require("../config/multerConfig");
 
-// -- 강좌 관리 API --
+// ** 헬퍼 함수 영역 **
+
+/** 평균 별점 계산하는 함수. */
+const updateCourseStats = async (courseId, connection) => {
+  try {
+    // 1. 통계 계산 (COUNT와 AVG)
+    const [[stats]] = await connection.query(
+      `SELECT 
+         COUNT(idx) as review_count, 
+         AVG(rating) as avg_rating 
+       FROM course_reviews 
+       WHERE course_idx = ?`,
+      [courseId]
+    );
+
+    const review_count = stats.review_count;
+    // AVG()는 0개일 때 NULL을 반환하므로, 0으로 처리
+    const avg_rating = stats.avg_rating || 0;
+
+    // 2. courses 테이블의 통계 컬럼 업데이트
+    await connection.query(
+      `UPDATE courses SET review_count = ?, avg_rating = ? WHERE idx = ?`,
+      [review_count, avg_rating, courseId]
+    );
+
+    console.log(
+      `[Stats Update] Course ${courseId}: ${review_count} reviews, ${Number(
+        avg_rating
+      ).toFixed(1)} avg.`
+    );
+  } catch (error) {
+    // 헬퍼 함수는 에러를 던져서, 부모 트랜잭션이 롤백되도록 해야 함
+    console.error(`[Stats Update Error] ${error.message}`);
+    throw new Error("강좌 통계 갱신에 실패했습니다.");
+  }
+};
+
+/** 강좌가 'published'일 때 변경 권한이 있는지 확인 */
+const checkModificationPermission = async (req, sectionId) => {
+  const [sectionCheck] = await pool.query(
+    `SELECT 
+       c.instructor_idx, c.status, u.is_verified_instructor
+     FROM sections s 
+     JOIN courses c ON s.course_idx = c.idx
+     JOIN users u ON c.instructor_idx = u.idx
+     WHERE s.idx = ?`,
+    [sectionId]
+  );
+
+  if (sectionCheck.length === 0) {
+    throw new Error(404, "섹션을 찾을 수 없습니다.");
+  }
+
+  const course = sectionCheck[0];
+  const instructor_idx = req.user.userIdx;
+
+  if (course.instructor_idx !== instructor_idx) {
+    throw new Error(403, "권한이 없습니다.");
+  }
+
+  // [핵심 로직]
+  // 1. 강좌가 'published' 상태이고,
+  // 2. 강사가 '미검증' 상태라면
+  if (course.status === "published" && !course.is_verified_instructor) {
+    // 3. 변경을 허용하는 대신, 강좌 전체를 'pending'으로 되돌림
+    await pool.query(
+      "UPDATE courses SET status = 'pending' WHERE idx = (SELECT course_idx FROM sections WHERE idx = ?)",
+      [sectionId]
+    );
+    console.log(
+      `[Content Change] 미검증 강사(${instructor_idx})가 게시된 강좌를 수정하여 PENDING으로 변경됩니다.`
+    );
+  }
+
+  // (검증된 강사거나, 'draft' 상태라면 그냥 통과)
+};
+
+// ** 강좌 관리 API **
 
 // 1. 새 강좌 생성
 // POST /api/courses
@@ -274,46 +351,6 @@ router.post("/:courseId/sections", protect, async (req, res) => {
     res.status(500).json({ message: "서버 오류" });
   }
 });
-
-// ** 강좌가 'published'일 때 변경 권한이 있는지 확인 **
-const checkModificationPermission = async (req, sectionId) => {
-  const [sectionCheck] = await pool.query(
-    `SELECT 
-       c.instructor_idx, c.status, u.is_verified_instructor
-     FROM sections s 
-     JOIN courses c ON s.course_idx = c.idx
-     JOIN users u ON c.instructor_idx = u.idx
-     WHERE s.idx = ?`,
-    [sectionId]
-  );
-
-  if (sectionCheck.length === 0) {
-    throw new Error(404, "섹션을 찾을 수 없습니다.");
-  }
-
-  const course = sectionCheck[0];
-  const instructor_idx = req.user.userIdx;
-
-  if (course.instructor_idx !== instructor_idx) {
-    throw new Error(403, "권한이 없습니다.");
-  }
-
-  // [핵심 로직]
-  // 1. 강좌가 'published' 상태이고,
-  // 2. 강사가 '미검증' 상태라면
-  if (course.status === "published" && !course.is_verified_instructor) {
-    // 3. 변경을 허용하는 대신, 강좌 전체를 'pending'으로 되돌림
-    await pool.query(
-      "UPDATE courses SET status = 'pending' WHERE idx = (SELECT course_idx FROM sections WHERE idx = ?)",
-      [sectionId]
-    );
-    console.log(
-      `[Content Change] 미검증 강사(${instructor_idx})가 게시된 강좌를 수정하여 PENDING으로 변경됩니다.`
-    );
-  }
-
-  // (검증된 강사거나, 'draft' 상태라면 그냥 통과)
-};
 
 // 6. 특정 섹션에 새 강의 추가 (★★파일 업로드 기능 적용★★)
 // POST /api/courses/sections/:sectionId/lectures
@@ -804,6 +841,272 @@ router.get("/public/:courseId", async (req, res) => {
     res.json({ ...course, sections, enrollment });
   } catch (error) {
     console.error("공개 강좌 상세 조회 중 오류:", error);
+    res.status(500).json({ message: "서버 오류" });
+  }
+});
+
+// --------------------------------------------------
+// --- 3. 강좌 후기 (Reviews) API ---
+// --------------------------------------------------
+
+/**
+ * @route   GET /api/courses/:courseId/reviews
+ * @desc    특정 강좌의 모든 후기 조회 (공개)
+ * @access  Public
+ */
+router.get("/:courseId/reviews", async (req, res) => {
+  const { courseId } = req.params;
+  try {
+    // (후기 작성자 정보도 JOIN해서 가져옴)
+    const [reviews] = await pool.query(
+      `SELECT r.*, u.name AS author_name, up.picture_url AS author_picture
+       FROM course_reviews r
+       JOIN users u ON r.user_idx = u.idx
+       LEFT JOIN user_profile up ON r.user_idx = up.user_idx
+       WHERE r.course_idx = ?
+       ORDER BY r.created_at DESC`,
+      [courseId]
+    );
+    res.json(reviews);
+  } catch (error) {
+    console.error("후기 조회 오류:", error);
+    res.status(500).json({ message: "서버 오류" });
+  }
+});
+
+/**
+ * @route   POST /api/courses/:courseId/reviews
+ * @desc    강좌 후기 작성 (80% 진행률 검증)
+ * @access  Private
+ */
+router.post("/:courseId/reviews", protect, async (req, res) => {
+  const { courseId } = req.params;
+  const user_idx = req.user.userIdx;
+  const { rating, content } = req.body;
+
+  if (!rating || !content) {
+    return res.status(400).json({ message: "별점과 내용은 필수입니다." });
+  }
+
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+
+    // 1. [검증] 수강 등록 정보 조회
+    const [[enrollment]] = await connection.query(
+      "SELECT idx, progress_percent FROM enrollments WHERE user_idx = ? AND course_idx = ?",
+      [user_idx, courseId]
+    );
+
+    if (!enrollment) {
+      throw new Error("강좌를 수강한 사용자만 후기를 작성할 수 있습니다."); // (403)
+    }
+
+    // 2. [검증] 80% 진행률
+    if (enrollment.progress_percent < 80) {
+      throw new Error("강좌를 80% 이상 수강해야 후기를 작성할 수 있습니다."); // (403)
+    }
+
+    // 3. 후기 작성
+    const [result] = await connection.query(
+      `INSERT INTO course_reviews (enrollment_idx, user_idx, course_idx, rating, content)
+       VALUES (?, ?, ?, ?, ?)`,
+      [enrollment.idx, user_idx, courseId, rating, content]
+    );
+
+    // 4. [신규] 강좌 통계 갱신 (헬퍼 함수 호출)
+    await updateCourseStats(courseId, connection);
+
+    await connection.commit(); // 👇 모든 작업 성공 시 커밋
+
+    const [[newReview]] = await connection.query(
+      "SELECT * FROM course_reviews WHERE idx = ?",
+      [result.insertId]
+    );
+    res.status(201).json(newReview);
+  } catch (error) {
+    await connection.rollback(); // 👈 에러 발생 시 롤백
+
+    if (error.code === "ER_DUP_ENTRY") {
+      return res
+        .status(409)
+        .json({ message: "후기는 한 번만 작성할 수 있습니다." });
+    }
+    if (
+      error.message.includes("수강한 사용자") ||
+      error.message.includes("80%")
+    ) {
+      return res.status(403).json({ message: error.message });
+    }
+    console.error("후기 작성 오류:", error);
+    res.status(500).json({ message: "서버 오류" });
+  } finally {
+    connection.release(); // 👈 커넥션 반환
+  }
+});
+
+// --------------------------------------------------
+// --- [신규] 후기 삭제 (작성자 or 관리자) ---
+// --------------------------------------------------
+/**
+ * @route   DELETE /api/courses/reviews/:reviewId
+ * @desc    Delete a course review (Author or Admin only)
+ * @access  Private
+ */
+router.delete("/reviews/:reviewId", protect, async (req, res) => {
+  const { reviewId } = req.params;
+  const user_idx = req.user.userIdx;
+  const user_role = req.user.role; // (auth.js에서 'role'을 JWT에 넣어준다고 가정)
+
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+
+    // 1. 리뷰 정보 조회 (작성자 ID, 강좌 ID)
+    const [[review]] = await connection.query(
+      "SELECT user_idx, course_idx FROM course_reviews WHERE idx = ?",
+      [reviewId]
+    );
+
+    if (!review) {
+      throw new Error(404, "리뷰를 찾을 수 없습니다.");
+    }
+
+    // 2. [핵심 권한] 관리자(admin)이거나, 리뷰 작성자(user_idx) 본인인가?
+    if (user_role !== "admin" && review.user_idx !== user_idx) {
+      // (강사는 이 조건에 해당 없으므로, 절대 삭제 불가)
+      throw new Error(403, "리뷰를 삭제할 권한이 없습니다.");
+    }
+
+    // 3. 리뷰 삭제
+    await connection.query("DELETE FROM course_reviews WHERE idx = ?", [
+      reviewId,
+    ]);
+
+    // 4. [핵심] 강좌 통계 갱신 (헬퍼 함수 호출)
+    await updateCourseStats(review.course_idx, connection);
+
+    await connection.commit();
+    res.json({ message: "리뷰가 성공적으로 삭제되었습니다." });
+  } catch (error) {
+    await connection.rollback();
+    console.error("리뷰 삭제 오류:", error);
+    if (error.message.startsWith("404"))
+      return res.status(404).json({ message: "리뷰를 찾을 수 없습니다." });
+    if (error.message.startsWith("403"))
+      return res.status(403).json({ message: "삭제 권한이 없습니다." });
+    res.status(500).json({ message: "서버 오류" });
+  } finally {
+    connection.release();
+  }
+});
+
+// --------------------------------------------------
+// --- [신규] 강좌 삭제 (강사 본인) ---
+// --------------------------------------------------
+/**
+ * @route   DELETE /api/courses/:courseId
+ * @desc    Delete a course (Instructor only)
+ * @access  Private
+ */
+router.delete("/:courseId", protect, async (req, res) => {
+  const { courseId } = req.params;
+  const instructor_idx = req.user.userIdx;
+
+  try {
+    // 1. 강좌 소유권 확인
+    const [[course]] = await pool.query(
+      `SELECT instructor_idx, thumbnail_url FROM courses WHERE idx = ?`,
+      [courseId]
+    );
+
+    if (!course) {
+      return res.status(404).json({ message: "강좌를 찾을 수 없습니다." });
+    }
+    if (course.instructor_idx !== instructor_idx) {
+      return res
+        .status(403)
+        .json({ message: "강좌를 삭제할 권한이 없습니다." });
+    }
+
+    // 2. 강좌 삭제
+    // (DB의 ON DELETE CASCADE가 sections, lectures, enrollments, reviews 등을 모두 처리한다고 가정)
+    await pool.query("DELETE FROM courses WHERE idx = ?", [courseId]);
+
+    // 3. [TODO] 서버에 저장된 썸네일/비디오 파일 삭제 (필수)
+    // if (course.thumbnail_url) {
+    //   await fs.unlink(path.join(__dirname, "..", course.thumbnail_url));
+    // }
+    // (강의 비디오 파일들도 삭제해야 함)
+
+    res.json({ message: "강좌가 성공적으로 삭제되었습니다." });
+  } catch (error) {
+    console.error("강좌 삭제 중 오류:", error);
+    res.status(500).json({ message: "서버 오류" });
+  }
+});
+
+// --------------------------------------------------
+// --- 4. 강의 댓글 (Comments) API ---
+// --------------------------------------------------
+
+/**
+ * @route   GET /api/courses/lectures/:lectureId/comments
+ * @desc    특정 강의의 모든 댓글 조회 (공개)
+ * @access  Public
+ */
+router.get("/lectures/:lectureId/comments", async (req, res) => {
+  const { lectureId } = req.params;
+  try {
+    const [comments] = await pool.query(
+      `SELECT c.*, u.name AS author_name, up.picture_url AS author_picture
+       FROM lecture_comments c
+       JOIN users u ON c.user_idx = u.idx
+       LEFT JOIN user_profile up ON c.user_idx = up.user_idx
+       WHERE c.lecture_idx = ?
+       ORDER BY c.created_at ASC`, // (오래된 순으로 정렬해야 토론 흐름이 맞음)
+      [lectureId]
+    );
+    res.json(comments);
+  } catch (error) {
+    console.error("댓글 조회 오류:", error);
+    res.status(500).json({ message: "서버 오류" });
+  }
+});
+
+/**
+ * @route   POST /api/courses/lectures/:lectureId/comments
+ * @desc    강의에 새 댓글 또는 대댓글 작성
+ * @access  Private
+ */
+router.post("/lectures/:lectureId/comments", protect, async (req, res) => {
+  const { lectureId } = req.params;
+  const user_idx = req.user.userIdx;
+  const { content, parentCommentIdx } = req.body;
+
+  if (!content) {
+    return res.status(400).json({ message: "댓글 내용은 필수입니다." });
+  }
+
+  try {
+    // (선택적) 수강생만 댓글을 달 수 있게 하려면, enrollments 테이블 검증 로직 추
+    const [result] = await pool.query(
+      `INSERT INTO lecture_comments (user_idx, lecture_idx, parent_comment_idx, content)
+       VALUES (?, ?, ?, ?)`,
+      [user_idx, lectureId, parentCommentIdx || null, content]
+    );
+
+    const [[newComment]] = await pool.query(
+      `SELECT c.*, u.name AS author_name, up.picture_url AS author_picture
+       FROM lecture_comments c
+       JOIN users u ON c.user_idx = u.idx
+       LEFT JOIN user_profile up ON c.user_idx = up.user_idx
+       WHERE c.idx = ?`,
+      [result.insertId]
+    );
+    res.status(201).json(newComment);
+  } catch (error) {
+    console.error("댓글 작성 오류:", error);
     res.status(500).json({ message: "서버 오류" });
   }
 });
