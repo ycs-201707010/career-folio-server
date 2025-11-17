@@ -62,7 +62,8 @@ router.get("/:id", async (req, res) => {
       p.user_idx,
          p.nickname,
          p.bio,
-         p.picture_url  -- (아바타용 사진)
+         p.picture_url,  -- (아바타용 사진)
+         p.readme
        FROM users u
        JOIN user_profile p ON u.idx = p.user_idx
        WHERE u.idx = ?`,

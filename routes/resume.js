@@ -156,5 +156,76 @@ router.post("/download-pdf", protect, async (req, res) => {
   }
 });
 
-// 4. module.exports로 라우터 내보내기
+// [신규] 1. 포트폴리오 설정 저장 API
+/**
+ * @route   PUT /api/resume/settings
+ * @desc    Update portfolio settings (template, public/private)
+ * @access  Private
+ */
+router.put("/settings", protect, async (req, res) => {
+  const user_idx = req.user.userIdx;
+  // 1. 클라이언트에서 'template' 이름과 'isPublic' 여부를 받음
+  const { template, isPublic } = req.body;
+
+  if (template === undefined || isPublic === undefined) {
+    return res.status(400).json({ message: "필수 설정값이 누락되었습니다." });
+  }
+
+  console.log(`template : ${template}`);
+  console.log(`isPublic : ${isPublic}`);
+
+  try {
+    await pool.query(
+      `UPDATE user_profile SET 
+         portfolio_template = ?, 
+         is_portfolio_public = ? 
+       WHERE user_idx = ?`,
+      [template, isPublic, user_idx]
+    );
+
+    res.json({ message: "포트폴리오 설정이 저장되었습니다." });
+  } catch (error) {
+    console.error("포트폴리오 설정 저장 오류:", error);
+    res.status(500).json({ message: "서버 오류" });
+  }
+});
+
+// [신규] 2. 공개 포트폴리오 조회 API
+/**
+ * @route   GET /api/resume/public/:id
+ * @desc    Get a user's public portfolio data by their string ID
+ * @access  Public
+ */
+router.get("/public/:id", async (req, res) => {
+  const targetId = req.params.id; // 예: 'king-gwangpil'
+
+  try {
+    // 1. ID로 user_idx 찾기
+    const [[credential]] = await pool.query(
+      "SELECT user_idx FROM user_credentials WHERE id = ?",
+      [targetId]
+    );
+    if (!credential) {
+      return res.status(404).json({ message: "사용자를 찾을 수 없습니다." });
+    }
+    const user_idx = credential.user_idx;
+
+    // 2. [핵심] 이력서 빌더용 'fetchProfileData' (services/profile.service.js)를 재사용
+    // (이 함수는 COALESCE 쿼리가 적용된 모든 데이터를 가져옴)
+    const profileData = await fetchProfileData(user_idx); // (Turn 70 코드 재사용)
+
+    // 3. [보안] 공개 여부 확인
+    if (!profileData.profile.is_portfolio_public) {
+      return res.status(403).json({ message: "이 포트폴리오는 비공개입니다." });
+    }
+
+    // 4. 공개 포트폴리오에 필요한 모든 데이터 전송
+    // (profile 객체 안에 'portfolio_template' 이름도 포함되어 있음)
+    res.json(profileData);
+  } catch (error) {
+    console.error(`공개 포트폴리오 조회 오류 (ID: ${targetId}):`, error);
+    res.status(500).json({ message: "서버 오류" });
+  }
+});
+
 module.exports = router;
