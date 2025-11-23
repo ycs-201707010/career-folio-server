@@ -267,6 +267,33 @@ router.put(
   }
 );
 
+// --------------------------------------------------
+// --- 👇 [신규] README 수정 API ---
+// --------------------------------------------------
+/**
+ * @route   PUT /api/profile/readme
+ * @desc    Update user's profile README.md
+ * @access  Private
+ */
+router.put("/readme", protect, async (req, res) => {
+  const user_idx = req.user.userIdx; // (auth.js 수정에 따라 idx 또는 userIdx 확인 필요. 여기선 userIdx로 가정)
+  // ★ 중요: auth.js에서 req.user에 넣는 값이 idx인지 userIdx인지 확인하세요.
+  // Turn 83에서 userIdx: user.idx 로 넣으셨다면 userIdx가 맞습니다.
+
+  const { readme } = req.body;
+
+  try {
+    await pool.query("UPDATE user_profile SET readme = ? WHERE user_idx = ?", [
+      readme,
+      user_idx,
+    ]);
+    res.json({ message: "README가 성공적으로 저장되었습니다." });
+  } catch (error) {
+    console.error("README 저장 오류:", error);
+    res.status(500).json({ message: "서버 오류" });
+  }
+});
+
 // --- ⬇️ [수정됨] 이력 항목 CRUD API (모두 구현) ⬇️ ---
 
 // --------------------------------------------------
