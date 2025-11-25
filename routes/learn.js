@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const pool = require("../db");
 const { protect } = require("../middleware/authMiddleWare.js");
+const { logActivity } = require("../services/activity.service"); // 잔디 심기 기능을 구현하기 위한 활동 서비스 파일
 
 // 1. 수강생용 강좌 상세 정보 조회 (영상 URL, 수강 기록 포함)
 // GET /api/learn/course/:courseId
@@ -187,6 +188,9 @@ router.post("/complete", protect, async (req, res) => {
     );
 
     await connection.commit();
+
+    logActivity(user_idx, "lecture_complete", lectureId);
+
     res.json({
       message: "강의를 완료했습니다.",
       progress_percent: newProgressPercent, // 👈 클라이언트 UI 즉시 갱신용
