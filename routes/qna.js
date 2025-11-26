@@ -6,6 +6,8 @@ const qnaService = require("../services/qna.service");
 const { logActivity } = require("../services/activity.service"); // 👈 잔디 심기용
 const { uploadImage } = require("../config/multerConfig");
 const pool = require("../db"); // DB 커넥션 풀
+const { generateAIAnswer } = require("../services/ai.service"); // 👈 1. 추가
+const { createNotification } = require("../services/notification.service");
 
 // 1. 질문 목록 조회 (공개)
 // GET /api/qna?page=1&category=tech&sort=latest
@@ -74,6 +76,12 @@ router.post("/", protect, uploadImage.array("images", 5), async (req, res) => {
     res
       .status(201)
       .json({ message: "질문이 등록되었습니다.", idx: newQuestionId });
+
+    // --- 👇 [핵심 추가] AI 답변 생성 트리거 (응답 보낸 후 실행) ---
+    // await를 쓰지 않습니다! (Fire-and-forget)
+    // 클라이언트는 기다리지 않게 하고, 서버 백그라운드에서 AI가 일을 시작합니다.
+    generateAIAnswer(newQuestionId, title, content, category);
+    // --- [추가 완료] ---
   } catch (error) {
     console.error("질문 등록 실패:", error);
     res.status(500).json({ message: "서버 오류" });
@@ -103,6 +111,22 @@ router.post("/:id/answers", protect, async (req, res) => {
     res
       .status(201)
       .json({ message: "답변이 등록되었습니다.", idx: newAnswerId });
+
+    // 1. 질문 작성자 찾기
+    const [[question]] = await pool.query(
+      "SELECT user_idx, title FROM questions WHERE idx = ?",
+      [question_idx]
+    );
+
+    // 2. 본인이 본인 글에 댓글 단 게 아니라면 알림 발송
+    if (question && question.user_idx !== user_idx) {
+      createNotification(
+        question.user_idx,
+        "answer",
+        `누군가 회원님의 질문에 답변을 남겼습니다.`,
+        `/qna/${question_idx}`
+      );
+    }
   } catch (error) {
     console.error("답변 등록 실패:", error);
     res.status(500).json({ message: "서버 오류" });

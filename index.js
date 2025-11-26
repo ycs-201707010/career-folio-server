@@ -29,6 +29,7 @@ const memosRouter = require("./routes/memos");
 const profileRouter = require("./routes/profile");
 const resumeRouter = require("./routes/resume");
 const qnaRouter = require("./routes/qna");
+const notificationRouter = require("./routes/notifications");
 
 app.use("/api/auth", authRouter); // '/api/auth' 경로로 들어오는 모든 요청을 authRouter가 처리하도록 연결.
 app.use("/api/courses", courseRouter);
@@ -42,6 +43,7 @@ app.use("/api/memos", memosRouter);
 app.use("/api/profile", profileRouter);
 app.use("/api/resume", resumeRouter);
 app.use("/api/qna", qnaRouter);
+app.use("/api/notifications", notificationRouter);
 
 // 기본 경로로 이동하면 반환됨
 app.get("/", (req, res) => {

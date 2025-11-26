@@ -294,6 +294,7 @@ router.put("/readme", protect, async (req, res) => {
   }
 });
 
+/** 유저 활동량  */
 router.get("/:id/activity", async (req, res) => {
   const targetId = req.params.id; // 예: 'king-gwangpil'
 
@@ -310,22 +311,17 @@ router.get("/:id/activity", async (req, res) => {
 
     const [activityResult] = await pool.query(
       `SELECT
-        created_at AS date,
+        DATE_FORMAT(created_at, '%Y-%m-%d') AS date,
         COUNT(*) AS count
       FROM user_activities
       WHERE user_idx = ?
         AND created_at >= DATE_SUB(NOW(), INTERVAL 1 YEAR)
-      GROUP BY created_at`,
+      GROUP BY date`,
       [user_idx]
     );
 
     const activityData = activityResult.reduce((acc, row) => {
-      // DB의 Date 객체를 "YYYY-MM-DD" 문자열로 변환
-      // (toISOString()은 UTC 기준이므로, 한국 시간 기준이 필요하면 별도 처리가 필요할 수 있습니다.
-      //  일단은 간단하게 ISO 문자열의 앞 10자리만 자릅니다.)
-      const dateKey = row.date.toISOString().split("T")[0];
-
-      acc[dateKey] = row.count;
+      acc[row.date] = row.count;
       return acc;
     }, {});
 
