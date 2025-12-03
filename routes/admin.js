@@ -6,6 +6,74 @@ const pool = require("../db");
 const { protect } = require("../middleware/authMiddleWare.js");
 const { admin } = require("../middleware/adminMiddleWare.js"); // 👈 대리님이 만드신 미들웨어
 
+// --------------------------------------------------
+// --- 1. [신규] 사용자 관리 API ---
+// --------------------------------------------------
+
+/**
+ * @route   GET /api/admin/users
+ * @desc    모든 사용자 목록 조회 (최신 가입순)
+ */
+router.get("/users", protect, admin, async (req, res) => {
+  try {
+    // 민감한 정보(password)는 제외하고 조회
+    const [users] = await pool.query(
+      `SELECT idx, name, email, role, is_verified_instructor, is_blocked, created_at 
+       FROM users 
+       ORDER BY created_at DESC`
+    );
+    res.json(users);
+  } catch (error) {
+    console.error("사용자 목록 조회 오류:", error);
+    res.status(500).json({ message: "서버 오류" });
+  }
+});
+
+/**
+ * @route   PATCH /api/admin/users/:userId/block
+ * @desc    사용자 차단/차단해제 토글
+ */
+router.patch("/users/:userId/block", protect, admin, async (req, res) => {
+  const { userId } = req.params;
+  const { block } = req.body; // true(차단) or false(해제)
+
+  try {
+    await pool.query("UPDATE users SET is_blocked = ? WHERE idx = ?", [
+      block,
+      userId,
+    ]);
+    res.json({
+      message: block ? "사용자가 차단되었습니다." : "차단이 해제되었습니다.",
+    });
+  } catch (error) {
+    console.error("사용자 차단 오류:", error);
+    res.status(500).json({ message: "서버 오류" });
+  }
+});
+
+// --------------------------------------------------
+// --- 2. [신규] 커뮤니티(Q&A) 관리 API ---
+// --------------------------------------------------
+
+/**
+ * @route   GET /api/admin/qna/all
+ * @desc    모든 질문글 조회 (관리용)
+ */
+router.get("/qna/all", protect, admin, async (req, res) => {
+  try {
+    const [questions] = await pool.query(
+      `SELECT q.*, u.name as author_name, u.email as author_email
+       FROM questions q
+       JOIN users u ON q.user_idx = u.idx
+       ORDER BY q.created_at DESC`
+    );
+    res.json(questions);
+  } catch (error) {
+    console.error("Q&A 전체 조회 오류:", error);
+    res.status(500).json({ message: "서버 오류" });
+  }
+});
+
 /**
  * @route   GET /api/admin/pending-courses
  * @desc    Get all courses awaiting approval (status = 'pending')

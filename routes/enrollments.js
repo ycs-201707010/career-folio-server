@@ -4,6 +4,7 @@ const express = require("express");
 const router = express.Router();
 const pool = require("../db");
 const { protect } = require("../middleware/authMiddleWare.js");
+const { awardBadge } = require("../services/badge.service");
 
 // 내 수강 목록 조회 API
 // GET /api/enrollments/my
@@ -141,6 +142,9 @@ router.post("/free", protect, async (req, res) => {
     );
 
     await connection.commit();
+
+    awardBadge(user_idx, "FIRST_COURSE");
+
     res.status(201).json({
       message: "수강 신청이 완료되었습니다. 바로 학습을 시작할 수 있습니다.",
     });

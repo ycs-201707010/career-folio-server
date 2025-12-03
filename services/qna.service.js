@@ -16,6 +16,7 @@ const getQuestions = async ({
       u.name AS author_name, 
       up.nickname AS author_nickname,
       up.picture_url AS author_picture,
+      uc.id AS author_id,
       (SELECT GROUP_CONCAT(t.name) 
        FROM question_tags qt 
        JOIN tags t ON qt.tag_idx = t.idx 
@@ -23,6 +24,7 @@ const getQuestions = async ({
     FROM questions q
     JOIN users u ON q.user_idx = u.idx
     LEFT JOIN user_profile up ON u.idx = up.user_idx
+    LEFT JOIN user_credentials uc ON u.idx = uc.user_idx
     WHERE 1=1
   `;
   const params = [];
@@ -75,10 +77,11 @@ const getQuestionDetail = async (questionId) => {
     const [questions] = await connection.query(
       `
       SELECT 
-        q.*, u.name AS author_name, up.nickname AS author_nickname, up.picture_url AS author_picture
+        q.*, u.name AS author_name, up.nickname AS author_nickname, up.picture_url AS author_picture, uc.id AS author_id
       FROM questions q
       JOIN users u ON q.user_idx = u.idx
       LEFT JOIN user_profile up ON u.idx = up.user_idx
+      LEFT JOIN user_credentials uc ON u.idx = uc.user_idx
       WHERE q.idx = ?
     `,
       [questionId]
@@ -102,11 +105,12 @@ const getQuestionDetail = async (questionId) => {
     const [answers] = await connection.query(
       `
       SELECT 
-        a.*, u.name AS author_name, up.nickname AS author_nickname, up.picture_url AS author_picture,
+        a.*, u.name AS author_name, up.nickname AS author_nickname, up.picture_url AS author_picture, uc.id AS author_id,
         (SELECT COUNT(*) FROM answer_likes WHERE answer_idx = a.idx AND vote_type = 'like') as like_count
       FROM answers a
       JOIN users u ON a.user_idx = u.idx
       LEFT JOIN user_profile up ON u.idx = up.user_idx
+      LEFT JOIN user_credentials uc ON u.idx = uc.user_idx
       WHERE a.question_idx = ?
       ORDER BY a.is_adopted DESC, a.created_at ASC
     `,

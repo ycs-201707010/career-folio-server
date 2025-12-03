@@ -213,6 +213,12 @@ router.post("/login", async (req, res) => {
 
     const user = users[0];
 
+    if (user.is_blocked) {
+      return res
+        .status(403)
+        .json({ message: "관리자에 의해 계정이 정지되었습니다." });
+    }
+
     // 4. JWT 토큰 생성
     const token = jwt.sign(
       {

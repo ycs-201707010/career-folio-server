@@ -72,13 +72,27 @@ router.get("/:id", async (req, res) => {
     const profile = profileResult[0];
 
     // 3. [수정] "경력"과 "기술"만 조회 (대리님 요청 사항)
-    const [[experiences], [skills]] = await Promise.all([
+    const [[experiences], [skills], [badges]] = await Promise.all([
       pool.query(
         "SELECT * FROM experiences WHERE user_idx = ? ORDER BY start_date DESC",
         [user_idx]
       ),
       pool.query(
         "SELECT * FROM skills WHERE user_idx = ? ORDER BY category, skill_name",
+        [user_idx]
+      ),
+
+      pool.query(
+        `SELECT 
+           b.idx AS badge_idx, -- 식별자
+           b.badge_code, b.badge_name, b.description, b.image_url, 
+           ub.acquired_at, 
+           ub.is_representative 
+         FROM user_badges ub
+         JOIN badges b ON ub.badge_idx = b.idx
+         WHERE ub.user_idx = ?
+         -- 대표 뱃지를 먼저 보여주고, 그 다음엔 최신순으로 정렬
+         ORDER BY ub.is_representative DESC, ub.acquired_at DESC`,
         [user_idx]
       ),
     ]);
@@ -90,6 +104,7 @@ router.get("/:id", async (req, res) => {
       experiences: experiences,
       skills: skills,
       // (뱃지 정보는 나중에 여기에 추가)
+      badges: badges,
     });
   } catch (error) {
     console.error(`공개 프로필 조회 오류 (ID: ${targetId}):`, error);
@@ -646,6 +661,50 @@ router.delete("/skills/:skillId", protect, async (req, res) => {
     res.json({ message: "성공적으로 삭제되었습니다." });
   } catch (error) {
     res.status(500).json({ message: "서버 오류" });
+  }
+});
+
+/**
+ * @route   PUT /api/profile/badges/representative
+ * @desc    대표 뱃지 설정 (최대 3개)
+ * @access  Private
+ */
+router.put("/badges/representative", protect, async (req, res) => {
+  const user_idx = req.user.idx;
+  const { badgeIdxs } = req.body; // 예: [1, 5, 2] (선택된 뱃지 ID 배열)
+
+  if (!Array.isArray(badgeIdxs) || badgeIdxs.length > 5) {
+    return res
+      .status(400)
+      .json({ message: "대표 뱃지는 최대 5개까지 선택 가능합니다." });
+  }
+
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+
+    // 1. 해당 유저의 모든 대표 뱃지 해제 (초기화)
+    await connection.query(
+      "UPDATE user_badges SET is_representative = 0 WHERE user_idx = ?",
+      [user_idx]
+    );
+
+    // 2. 선택된 뱃지들만 대표 뱃지로 설정
+    if (badgeIdxs.length > 0) {
+      await connection.query(
+        "UPDATE user_badges SET is_representative = 1 WHERE user_idx = ? AND badge_idx IN (?)",
+        [user_idx, badgeIdxs]
+      );
+    }
+
+    await connection.commit();
+    res.json({ message: "대표 뱃지가 설정되었습니다." });
+  } catch (error) {
+    await connection.rollback();
+    console.error("대표 뱃지 설정 오류:", error);
+    res.status(500).json({ message: "서버 오류" });
+  } finally {
+    connection.release();
   }
 });
 

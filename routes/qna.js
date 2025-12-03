@@ -8,6 +8,7 @@ const { uploadImage } = require("../config/multerConfig");
 const pool = require("../db"); // DB 커넥션 풀
 const { generateAIAnswer } = require("../services/ai.service"); // 👈 1. 추가
 const { createNotification } = require("../services/notification.service");
+const { awardBadge } = require("../services/badge.service");
 
 // 1. 질문 목록 조회 (공개)
 // GET /api/qna?page=1&category=tech&sort=latest
@@ -72,6 +73,8 @@ router.post("/", protect, uploadImage.array("images", 5), async (req, res) => {
 
     // 🌱 잔디 심기! (질문 등록)
     logActivity(user_idx, "Q_POST", newQuestionId);
+    // 뱃지 등록
+    awardBadge(user_idx, "FIRST_QUESTION");
 
     res
       .status(201)
@@ -107,6 +110,7 @@ router.post("/:id/answers", protect, async (req, res) => {
 
     // 🌱 잔디 심기! (답변 등록)
     logActivity(user_idx, "A_POST", newAnswerId);
+    awardBadge(user_idx, "FIRST_ANSWER");
 
     res
       .status(201)
