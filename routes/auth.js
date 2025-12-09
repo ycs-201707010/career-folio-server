@@ -36,7 +36,7 @@ router.get("/check-duplicate", async (req, res) => {
 // 2. 이메일 인증 코드 발송 API
 // POST /api/auth/send-code
 router.post("/send-code", async (req, res) => {
-  const { email } = req.body;
+  const { email, type } = req.body;
 
   try {
     // 이메일 중복 확인
@@ -44,8 +44,20 @@ router.post("/send-code", async (req, res) => {
       `SELECT COUNT(*) as count FROM users WHERE email = ?`,
       [email]
     );
-    if (users[0].count > 0) {
-      return res.status(409).json({ message: "이미 가입된 이메일입니다." });
+    const isUserExists = users.length > 0;
+
+    if (type === "signup") {
+      // 1. 회원가입용: 이미 있으면 에러!
+      if (isUserExists) {
+        return res.status(409).json({ message: "이미 가입된 이메일입니다." });
+      }
+    } else if (type === "find") {
+      // 2. 계정 찾기용: 없으면 에러!
+      if (!isUserExists) {
+        return res
+          .status(404)
+          .json({ message: "가입된 회원 정보를 찾을 수 없습니다." });
+      }
     }
 
     const code = Math.floor(100000 + Math.random() * 900000).toString(); // 6자리 랜덤 코드 생성
