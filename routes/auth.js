@@ -246,4 +246,92 @@ router.post("/login", async (req, res) => {
   }
 });
 
+// 6. 아이디 찾기 API
+// POST /api/auth/find-id
+router.post("/find-id", async (req, res) => {
+  const { name, email } = req.body;
+
+  // 1. 이메일 인증 확인 (보안 필수)
+  const verification = emailVerifications[email];
+  if (!verification || !verification.verified) {
+    return res
+      .status(400)
+      .json({ message: "이메일 인증이 완료되지 않았습니다." });
+  }
+
+  try {
+    // 2. 이름과 이메일로 아이디 조회
+    const [rows] = await pool.query(
+      `SELECT uc.id 
+       FROM users u 
+       JOIN user_credentials uc ON u.idx = uc.user_idx 
+       WHERE u.name = ? AND u.email = ?`,
+      [name, email]
+    );
+
+    if (rows.length === 0) {
+      return res
+        .status(404)
+        .json({ message: "일치하는 회원 정보를 찾을 수 없습니다." });
+    }
+
+    // 3. 아이디 반환
+    // (보안을 위해 일부 마스킹 처리를 할 수도 있지만, 여기선 전체 아이디를 보여줍니다)
+    res.json({ id: rows[0].id, message: "아이디를 찾았습니다." });
+
+    // (인증 정보 삭제는 선택: 아이디 확인 후 바로 비번 찾기를 할 수도 있으므로 유지)
+  } catch (error) {
+    console.error("아이디 찾기 오류:", error);
+    res.status(500).json({ message: "서버 오류" });
+  }
+});
+
+// 7. 비밀번호 재설정 API
+// POST /api/auth/reset-password
+router.post("/reset-password", async (req, res) => {
+  const { id, name, email, newPassword } = req.body;
+
+  // 1. 이메일 인증 확인
+  const verification = emailVerifications[email];
+  if (!verification || !verification.verified) {
+    return res
+      .status(400)
+      .json({ message: "이메일 인증이 완료되지 않았습니다." });
+  }
+
+  try {
+    // 2. 사용자 확인 (ID, 이름, 이메일이 모두 일치해야 함)
+    const [users] = await pool.query(
+      `SELECT u.idx 
+       FROM users u 
+       JOIN user_credentials uc ON u.idx = uc.user_idx 
+       WHERE uc.id = ? AND u.name = ? AND u.email = ?`,
+      [id, name, email]
+    );
+
+    if (users.length === 0) {
+      return res
+        .status(404)
+        .json({ message: "일치하는 회원 정보를 찾을 수 없습니다." });
+    }
+
+    const user_idx = users[0].idx;
+
+    // 3. 새 비밀번호 해싱 및 업데이트
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    await pool.query(
+      "UPDATE user_credentials SET password = ? WHERE user_idx = ?",
+      [hashedPassword, user_idx]
+    );
+
+    // 4. 인증 정보 삭제 (보안)
+    delete emailVerifications[email];
+
+    res.json({ message: "비밀번호가 성공적으로 변경되었습니다." });
+  } catch (error) {
+    console.error("비밀번호 재설정 오류:", error);
+    res.status(500).json({ message: "서버 오류" });
+  }
+});
+
 module.exports = router;
